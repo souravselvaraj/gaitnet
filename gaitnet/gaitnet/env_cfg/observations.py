@@ -94,7 +94,7 @@ def contact_state_controller(env: ManagerBasedEnv) -> torch.Tensor:
     contacts: np.ndarray = controllers.call(
         Sim2RealInterface.get_contact_state, mask=None
     )
-    # FR, FL, RR, RL to FL, FR, RL, RR
+    # interface order FL, FR, RL, RR -> terrain-slot order FR, FL, RR, RL
     contacts = contacts[:, [1, 0, 3, 2]]
     # logger.info(f"contact: {contacts[0]}")
     contacts_gpu = torch.from_numpy(contacts).to(env.device)

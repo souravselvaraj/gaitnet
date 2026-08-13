@@ -60,6 +60,8 @@ class FootstepCandidateSampler:
             terrain_mask, cost_map, torch.tensor(float("inf"), device=cost_map.device)
         )
 
+        # Already in terrain-slot order [FR, FL, RR, RL]: contact_state_controller
+        # reorders the controller's native [FL, FR, RL, RR] before it reaches the obs.
         contact_states = obs[:, contact_state_indices].bool()  # (num_envs, 4)
         swing_states = ~contact_states  # (num_envs, 4)
         masked_cost_maps = torch.where(
@@ -70,9 +72,12 @@ class FootstepCandidateSampler:
 
         # require minimum number leg to be in contact
         # by setting all costs to inf if not enough legs in contact
-        min_legs_in_contact = 2
+        # A step lifts one contacting leg, so require 3 down to leave a 3-point
+        # support polygon. This is the rule the deployed checkpoint was trained
+        # under -- do not relax it without retraining.
+        min_legs_in_contact = 3
         num_legs_in_contact = contact_states.sum(dim=1)  # (num_envs,)
-        contact_limit = num_legs_in_contact <= min_legs_in_contact  # (num_envs,)
+        contact_limit = num_legs_in_contact < min_legs_in_contact  # (num_envs,)
         masked_cost_maps = torch.where(
             contact_limit.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1),
             torch.tensor(float("inf"), device=cost_map.device),

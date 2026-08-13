@@ -112,14 +112,14 @@ class FSCActionTerm(ActionTerm):
         Returns:
             The kwargs for the footstep initiation call.
         """
-        # convert legs from [FL, FR, RL, RR] order to [FR, FL, RR, RL] order
-        # this is needed to match the order expected by the Sim2RealInterface
+        # convert legs from terrain-slot order [FR, FL, RR, RL] to the
+        # [FL, FR, RL, RR] order expected by the Sim2RealInterface
         legs = processed_actions[:, 0].astype(np.int32)
         legs_processed = np.copy(legs)
-        legs_processed[legs == 0] = 1  # FL -> FR
-        legs_processed[legs == 1] = 0  # FR -> FL
-        legs_processed[legs == 2] = 3  # RL -> RR
-        legs_processed[legs == 3] = 2  # RR -> RL
+        legs_processed[legs == 0] = 1  # slot 0 FR -> interface 1
+        legs_processed[legs == 1] = 0  # slot 1 FL -> interface 0
+        legs_processed[legs == 2] = 3  # slot 2 RR -> interface 3
+        legs_processed[legs == 3] = 2  # slot 3 RL -> interface 2
         return {
             "leg": legs_processed,
             "location_hip": processed_actions[:, 1:3],
