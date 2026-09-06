@@ -66,8 +66,13 @@ def xy_to_idx(xy: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     in_bounds_y = (y >= -half_size_y) & (y <= half_size_y)
     in_bounds = in_bounds_x & in_bounds_y
 
-    idx = torch.bucketize(x, x_locations)
-    idy = torch.bucketize(y, y_locations)
+    # bucketize against the cell CENTRES returns i with centres[i-1] < v <= centres[i],
+    # i.e. it rounds UP to the next cell for any position above a centre while a position
+    # below one stays put. That is a one-sided +x/+y bias of up to a full cell on every
+    # lookup, and this is the position->index hook handed to the projected-gradient search.
+    # Round to the NEAREST centre instead, which is what the docstring describes.
+    idx = torch.round((x + half_size_x) / _depricated_grid_resolution).long()
+    idy = torch.round((y + half_size_y) / _depricated_grid_resolution).long()
 
     # clamp indices to be within grid size
     idx = torch.clamp(idx, 0, _depricated_grid_size[0] - 1)
