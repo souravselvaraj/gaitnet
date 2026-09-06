@@ -22,7 +22,6 @@ class ProjectRelativeFormatter(logging.Formatter):
     """Custom formatter that shows file path relative to project root."""
 
     def format(self, record: logging.LogRecord) -> str:
-        print(record)
         try:
             path = Path(record.pathname).resolve()
             record.relpath = path.relative_to(PROJECT_ROOT)

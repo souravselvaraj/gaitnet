@@ -15,8 +15,12 @@ except ImportError:
 image_dir = PROJECT_ROOT / "data" / "debug-images"
 image_dir.mkdir(parents=True, exist_ok=True)
 
-# Delete all old images
-for file in image_dir.iterdir():
+# Deleting on IMPORT destroys a previous analysis's images whenever anything imports
+# gaitnet.util -- which the ROS service does, transitively, through gaitnet.util.pga.
+# Opt in explicitly instead.
+import os as _os
+if _os.environ.get("GAITNET_CLEAR_DEBUG_IMAGES") == "1":
+  for file in image_dir.iterdir():
     if file.is_file() and file.suffix in [".png", ".jpg", ".jpeg"]:
         try:
             file.unlink()
