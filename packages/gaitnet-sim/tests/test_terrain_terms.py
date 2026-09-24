@@ -14,8 +14,8 @@ from gaitnet_core.grid import FootholdGrid  # noqa: E402
 from gaitnet_core.robot_spec import GO1  # noqa: E402
 from gaitnet_core.state import TerrainPatch  # noqa: E402
 from gaitnet_sim.env.terminations import base_below_terrain_clearance, feet_below_walkable_terrain  # noqa: E402
-from gaitnet_sim.terrain_generation import pillar_terrain  # noqa: E402
-from gaitnet_sim.terrains import HfPillarsTerrainCfg  # noqa: E402
+from gaitnet_sim.terrain_generation import hole_terrain, pillar_terrain  # noqa: E402
+from gaitnet_sim.terrains import HfHolesTerrainCfg, HfPillarsTerrainCfg  # noqa: E402
 
 GRID = FootholdGrid(resolution=0.015, size=(9, 9), border=2)
 
@@ -45,6 +45,37 @@ def test_pillars_have_gaps_and_bounded_heights():
     platform = round(cfg.platform_size / cfg.horizontal_scale)
     start = (heights.shape[0] - platform) // 2
     assert (heights[start : start + platform, start : start + platform] == 0).all()
+
+
+def holes(difficulty: float, size: float, seed: int = 0) -> tuple[np.ndarray, HfHolesTerrainCfg]:
+    cfg = HfHolesTerrainCfg(size=(size, size), horizontal_scale=0.025, vertical_scale=0.005)
+    np.random.seed(seed)
+    return hole_terrain.__wrapped__(difficulty, cfg), cfg
+
+
+# 3.975 m is what Isaac Lab's mesh conversion hands the function for a 4 m sub-terrain (one
+# border sample off each side): 159 samples, not a multiple of the 5-sample hole cells
+@pytest.mark.parametrize("size", [3.0, 3.975, 4.0])
+def test_holes_at_difficulty_zero_are_flat(size):
+    heights, cfg = holes(0.0, size)
+    assert heights.shape == (int(size / cfg.horizontal_scale),) * 2
+    assert (heights == 0).all()
+
+
+@pytest.mark.parametrize("size", [3.975, 4.0])
+def test_holes_have_the_requested_fraction_and_a_centred_platform(size):
+    heights, cfg = holes(0.3, size)
+    void = cfg.hole_depth / cfg.vertical_scale
+    assert set(np.unique(heights)) == {0.0, void}
+    assert abs((heights == void).mean() - 0.3) < 0.05
+    # the spawn platform is centred to within a sample (it used to be 0.11 m off)
+    platform = round(cfg.platform_size / cfg.horizontal_scale)
+    start = (heights.shape[0] - platform) // 2
+    inner = heights[start + 1 : start + platform - 1, start + 1 : start + platform - 1]
+    assert (inner == 0).all()
+    # no edge trench: the outermost rows and columns are not all void
+    for edge in (heights[0], heights[-1], heights[:, 0], heights[:, -1]):
+        assert (edge == 0).any()
 
 
 def fake_env_with_term(heights: torch.Tensor, foot_heights: torch.Tensor):

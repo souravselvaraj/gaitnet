@@ -29,7 +29,11 @@ def hole_terrain(difficulty: float, cfg: "HfHolesTerrainCfg") -> np.ndarray:
     # SCALE x SCALE samples to keep its walls vertical
     scale = 5
     output_size = (int(cfg.size[0] / cfg.horizontal_scale), int(cfg.size[1] / cfg.horizontal_scale))
-    shape = (output_size[0] // scale, output_size[1] // scale)
+    # enough coarse cells to cover the field, cropped symmetrically below: Isaac Lab's mesh
+    # conversion hands the function a size one border sample short on each side (159 samples
+    # for 4 m), which is not a multiple of SCALE, and padding the remainder with void used to
+    # leave a 0.1 m trench along two edges of every sub-terrain, even at difficulty 0
+    shape = (-(-output_size[0] // scale), -(-output_size[1] // scale))
     void = cfg.hole_depth / cfg.vertical_scale
     terrain = np.zeros(shape, dtype=np.float32)
 
@@ -39,13 +43,14 @@ def hole_terrain(difficulty: float, cfg: "HfHolesTerrainCfg") -> np.ndarray:
     holes = cells[: int(difficulty * len(cells))]
     terrain[tuple(holes.T)] = void
 
-    platform = int(cfg.platform_size / cfg.horizontal_scale / scale)
-    start = (int(shape[0] / 2 - platform / 2), int(shape[1] / 2 - platform / 2))
+    platform = min(int(cfg.platform_size / cfg.horizontal_scale / scale), *shape)
+    start = ((shape[0] - platform) // 2, (shape[1] - platform) // 2)
     terrain[start[0] : start[0] + platform, start[1] : start[1] + platform] = 0
 
     terrain = scipy.ndimage.zoom(terrain, scale, order=0)
-    pad = ((0, output_size[0] - terrain.shape[0]), (0, output_size[1] - terrain.shape[1]))
-    return np.pad(terrain, pad, mode="constant", constant_values=void)
+    # centre the crop so the platform stays centred on the spawn point
+    crop = ((terrain.shape[0] - output_size[0]) // 2, (terrain.shape[1] - output_size[1]) // 2)
+    return terrain[crop[0] : crop[0] + output_size[0], crop[1] : crop[1] + output_size[1]]
 
 
 @height_field_to_mesh
