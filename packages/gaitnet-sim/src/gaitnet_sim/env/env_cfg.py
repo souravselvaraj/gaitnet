@@ -118,7 +118,9 @@ class RewardsCfg:
     xy_tracking = RewTerm(func=rewards.track_lin_vel_xy_exp, weight=0.5, params={"std": 0.1})
     yaw_tracking = RewTerm(func=rewards.track_ang_vel_z_exp, weight=0.5, params={"std": 0.1})
 
-    step_taken = RewTerm(func=rewards.step_taken, weight=-0.5)
+    # a step costs 0.2 x 0.04 = 0.008: enough that waiting is worth something, light enough that
+    # starting two footsteps in one tick (max_steps_per_tick=2) is not priced out
+    step_taken = RewTerm(func=rewards.step_taken, weight=-0.2)
     terminating = RewTerm(func=mdp.is_terminated, weight=-200.0)
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.5)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1)
