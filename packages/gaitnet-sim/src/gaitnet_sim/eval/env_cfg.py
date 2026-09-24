@@ -48,6 +48,7 @@ def apply_bundle_contract(env_cfg: GaitNetEnvCfg, bundle: PolicyBundle) -> None:
     env_cfg.gaitnet.min_foot_separation = rules.min_foot_separation
     env_cfg.gaitnet.midline_margin = rules.midline_margin
     env_cfg.gaitnet.max_reach = rules.max_reach
+    env_cfg.gaitnet.median_window = rules.median_window
     update_period = env_cfg.decimation * env_cfg.sim.dt
     for name, hip in zip(SCANNER_NAMES, HIP_NAMES):
         scanner = foothold_scanner_cfg(hip, grid)

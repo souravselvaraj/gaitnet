@@ -113,3 +113,25 @@ def test_kinematic_rules():
     obs.terrain.heights[:] = -0.38  # a step down: the grid's corners are out of reach
     ok = FootholdRules(max_reach=0.40).kinematic(obs, GO1)[0, 0]
     assert ok[12, 12] and not ok[0, 0] and not ok[24, 24]
+
+
+def test_median_filter_removes_speckle_and_keeps_steps():
+    from conftest import make_observation
+    from gaitnet_core.planner import FootholdRules
+    from gaitnet_core.robot_spec import GO1
+    from gaitnet_core.terrain import median_filter
+
+    torch.manual_seed(0)
+    obs = make_observation(1)
+    obs.terrain.heights += torch.randn_like(obs.terrain.heights) * 0.01  # 1 cm speckle
+    noisy = FootholdRules().valid(obs, GO1).float().mean()
+    filtered = FootholdRules(median_window=3).valid(obs, GO1).float().mean()
+    assert noisy < 0.3 and filtered > 0.8
+
+    step = torch.full((1, 1, 31, 31), -0.26)
+    step[..., 16:, :] = -0.16
+    step[0, 0, 5, 5] = float("-inf")  # a lone unknown cell is filled; a big unknown area stays
+    step[0, 0, 20:, 20:] = float("-inf")
+    out = median_filter(step, 3)
+    assert torch.equal(out[0, 0, 10:14, 10], step[0, 0, 10:14, 10]) and out[0, 0, 17, 10] == -0.16
+    assert torch.isfinite(out[0, 0, 5, 5]) and torch.isinf(out[0, 0, 25, 25])

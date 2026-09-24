@@ -63,6 +63,7 @@ Three things must agree between whoever produced a policy and whoever runs it: t
 | Reach band | foothold 0.38 m to 0.12 m below the hip | `valid_footholds` |
 | Edge rule | a cell whose 3x3 window spans more than 0.02 m is an edge; 2 cells of margin (so slopes over ~0.01 m per cell are all edge) | needs `border >= edge_margin + 1` |
 | Leg rule | a leg may lift off only if 2 legs stay in scheduled stance, and (sim default) after 0.08 s of stance | `eligibility.py` |
+| Terrain filter | (sim default) the rules and candidate heights read the patch median filtered over 3 x 3 cells | `FootholdRules.heights` |
 | Kinematic rules | (sim defaults) footholds 0.06 m from other feet, 0.02 m on the leg's own side of the centre line, within 0.40 m of the hip | `FootholdRules.kinematic` |
 | State vector | 8 features, 52 numbers | `gaitnet_core.features.FEATURES`, chosen by name |
 

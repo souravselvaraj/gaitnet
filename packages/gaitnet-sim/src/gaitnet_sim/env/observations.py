@@ -64,8 +64,9 @@ def footstep_candidates(
     """
     term = footstep_action(env, action_name)
     observation = term.planner_observation()
-    valid = env.cfg.gaitnet.foothold_rules().valid(observation, term.spec)
-    heights = inner_heights(observation.terrain.heights, term.grid)
+    rules = env.cfg.gaitnet.foothold_rules()
+    valid = rules.valid(observation, term.spec)
+    heights = inner_heights(rules.heights(observation), term.grid)
     candidates = make_sampler(sampler, **(sampler_kwargs or {})).sample(valid, term.grid, heights=heights)
     return candidates.pack()
 

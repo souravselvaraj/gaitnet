@@ -20,6 +20,25 @@ def _window_max(x: torch.Tensor, radius: int) -> torch.Tensor:
     return out.reshape(n, l, h, w)
 
 
+def median_filter(heights: torch.Tensor, window: int) -> torch.Tensor:
+    """(N, L, H, W) heights, each replaced by the median of its `window` x `window`
+    neighbourhood (edges replicated); `window` 1 returns them as they are.
+
+    A real elevation map is noisy cell to cell, and the edge rule reads a 3x3 height range, so
+    noise of about half its threshold already marks most flat ground as edge. The median
+    removes that speckle but keeps steps, which are wider than the window. Unknown (-inf) cells
+    sort lowest, so a cell ends up unknown only if most of its window is."""
+    if window <= 1:
+        return heights
+    if window % 2 == 0:
+        raise ValueError(f"the median window must be odd, got {window}")
+    n, legs, h, w = heights.shape
+    pad = window // 2
+    flat = torch.nn.functional.pad(heights.reshape(n * legs, 1, h, w), (pad, pad, pad, pad), mode="replicate")
+    neighbourhoods = torch.nn.functional.unfold(flat, window)  # (N*L, window^2, H*W)
+    return neighbourhoods.median(dim=1).values.reshape(n, legs, h, w)
+
+
 def valid_footholds(
     heights: torch.Tensor,
     spec: RobotSpec,

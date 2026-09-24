@@ -21,7 +21,7 @@ from gaitnet_core.rounds import StateEditor, TickDistribution
 from gaitnet_core.samplers import CandidateSampler
 from gaitnet_core.selection import Scores, Selection, leg_marginals
 from gaitnet_core.state import Observation
-from gaitnet_core.terrain import inner_heights, valid_footholds
+from gaitnet_core.terrain import inner_heights, median_filter, valid_footholds
 
 
 @dataclass
@@ -48,11 +48,18 @@ class FootholdRules:
     max_reach: float | None = None
     """If set, footholds farther than this from the hip (m, 3D, at the terrain height) are
     invalid: the grid's corners lie beyond the leg's length."""
+    median_window: int = 1
+    """The terrain the rules and the candidates' heights read is median filtered over this
+    many cells square first (`gaitnet_core.terrain.median_filter`); 1 for none."""
+
+    def heights(self, observation: Observation) -> torch.Tensor:
+        """(N, L, *patch_size) the terrain the rules read: the patch, median filtered."""
+        return median_filter(observation.terrain.heights, self.median_window)
 
     def valid(self, observation: Observation, spec: RobotSpec) -> torch.Tensor:
         """(N, L, *grid.size) cells each leg may step to this tick."""
         cells = valid_footholds(
-            observation.terrain.heights,
+            self.heights(observation),
             spec,
             observation.terrain.grid,
             step_threshold=self.step_threshold,
@@ -65,7 +72,7 @@ class FootholdRules:
         """(N, L, *grid.size) cells the leg can reach without meeting another leg: the foot
         separation, midline and reach rules (all True with their defaults)."""
         grid = observation.terrain.grid
-        heights = inner_heights(observation.terrain.heights, grid)
+        heights = inner_heights(self.heights(observation), grid)
         n, legs = heights.shape[:2]
         ok = torch.ones_like(heights, dtype=torch.bool)
         cells = grid.cell_centers(device=heights.device)  # (*size, 2), hip frame
@@ -169,7 +176,7 @@ class FootstepPlanner:
 
     def sample(self, observation: Observation, generator: torch.Generator | None = None) -> Candidates:
         valid = self.rules.valid(observation, self.spec)
-        heights = inner_heights(observation.terrain.heights, self.grid)
+        heights = inner_heights(self.rules.heights(observation), self.grid)
         return self.sampler.sample(valid, self.grid, heights=heights, generator=generator)
 
     def score(self, observation: Observation, candidates: Candidates) -> Scores:

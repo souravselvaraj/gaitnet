@@ -48,6 +48,9 @@ class GaitNetCfg:
     """A leg's footholds stay this far on its own side of the base's centre line (m)."""
     max_reach: float | None = 0.40
     """Footholds farther than this from the hip are invalid (m); the leg is about 0.43 m."""
+    median_window: int = 3
+    """The rules read the terrain median filtered over 3 x 3 cells, which removes an elevation
+    map's cell-to-cell speckle that would otherwise read as edges everywhere."""
 
     def robot_spec(self) -> RobotSpec:
         return ROBOTS[self.robot]
@@ -67,4 +70,5 @@ class GaitNetCfg:
             min_foot_separation=self.min_foot_separation,
             midline_margin=self.midline_margin,
             max_reach=self.max_reach,
+            median_window=self.median_window,
         )
