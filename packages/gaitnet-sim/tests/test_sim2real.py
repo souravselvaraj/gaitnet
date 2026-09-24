@@ -78,12 +78,14 @@ def resolve(task: str = "GaitNet-Holes"):
 def test_training_randomizes_and_play_mode_does_not():
     env, _ = resolve()
     assert env.actions.footstep.observation_noise is not None
+    assert env.actions.footstep.front_camera is not None
     assert env.events.add_base_mass is not None and env.events.push_robot is not None
     low, high = env.events.physics_material.params["static_friction_range"]
     assert low < high
 
     env.play_mode()
     assert env.actions.footstep.observation_noise is None
+    assert env.actions.footstep.front_camera is None
     assert env.events.add_base_mass is None and env.events.push_robot is None
     assert env.events.physics_material.params["static_friction_range"] == (1.0, 1.0)
     assert env.events.physics_material.params["dynamic_friction_range"] == (1.0, 1.0)

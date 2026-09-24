@@ -161,13 +161,22 @@ Training runs are hardened by default:
   footholds and the terrain group therefore all see the same corrupted world, as on
   hardware. Contact, gait timing and commands stay exact. Terminations, rewards and
   privileged observations read the truth.
+- **Front camera** (`env.actions.footstep.front_camera`, see `env/perception.py`): the
+  terrain patches as a single forward depth camera's elevation map (a D435i, mounted as in
+  legged_perceptive) would know them. Each robot keeps a 3 cm map around its spawn; cells
+  inside the camera's view are marked seen and get a depth error (4 mm x range²,
+  inverse-variance fused over frames), and patch cells never seen read as unknown. The
+  ground under the front feet is below the camera's view, so it is always memory, and ground
+  behind or beside the robot is unknown until the robot turns to it. The spawn platform
+  starts out known. Mount, field of view, range and noise are cfg fields.
 - **Dynamics**: foot friction in 0.5 to 1.25 static and 0.4 to 1.0 dynamic, trunk mass −1 to
   +2 kg (both per robot at startup), and velocity pushes of up to 0.2 m/s every 8 to 12 s.
   The MPC keeps its nominal model throughout.
 
 `env.play_mode()` turns all of this off: nominal friction of 1.0, no added mass, no pushes,
-no noise. `eval_sweep` and `walk` use it unless given `--randomize`. To train without it,
-`env.actions.footstep.observation_noise=None env.events.push_robot=None ...` (or add a
+no noise, exact terrain everywhere. `eval_sweep` and `walk` use it unless given
+`--randomize`. To train without it, `env.actions.footstep.observation_noise=None
+env.actions.footstep.front_camera=None env.events.push_robot=None ...` (or add a
 preset). Deploying a bundle on a robot is in [gaitnet-ros1](../gaitnet-ros1/README.md).
 
 ## Evaluation

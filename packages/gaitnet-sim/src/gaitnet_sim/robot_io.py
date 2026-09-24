@@ -124,6 +124,11 @@ class RobotIO:
         hips_z = torch.stack([scanner.data.pos_w.torch[:, 2] for scanner in self.scanners], dim=1)
         return feet_z - hips_z
 
+    def terrain_points_xy(self) -> torch.Tensor:
+        """(N, L, *patch_size, 2) world xy of every terrain patch cell (m), where its ray hit."""
+        points = [scanner.data.ray_hits_w.torch[..., :2] for scanner in self.scanners]
+        return torch.stack(points, dim=1).reshape(-1, len(self.scanners), *self.grid.patch_size, 2)
+
     def terrain(self) -> TerrainPatch:
         """Terrain heights relative to each hip, -inf where a ray found nothing."""
         patches = []

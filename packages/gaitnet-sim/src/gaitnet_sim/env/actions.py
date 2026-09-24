@@ -26,6 +26,7 @@ from gaitnet_core.action_layout import EnvAction
 from gaitnet_core.interfaces import FootstepCommand, LowLevelController
 from gaitnet_core.state import Observation, RobotState, TerrainPatch
 from gaitnet_sim.env.noise import corrupt
+from gaitnet_sim.env.perception import FrontCameraMap
 from gaitnet_sim.robot_io import RobotIO
 
 if TYPE_CHECKING:
@@ -63,6 +64,11 @@ class FootstepControlAction(ActionTerm):
         self._nudge = torch.zeros(self.num_envs, 3, device=self.device)
         self._footsteps = [FootstepCommand.none(self.num_envs, device=self.device) for _ in range(self.rounds)]
         self._planner_observation: Observation | None = None
+        self.camera_map = (
+            FrontCameraMap(cfg.front_camera, self.num_envs, self.device) if cfg.front_camera is not None else None
+        )
+        if self.camera_map is not None:
+            self.camera_map.reset(torch.arange(self.num_envs, device=self.device), env.scene.env_origins[:, :2])
 
     def __del__(self):
         controller = getattr(self, "controller", None)
@@ -119,10 +125,22 @@ class FootstepControlAction(ActionTerm):
         per env step, so every observation group sees the same corrupted world."""
         if self._planner_observation is None:
             observation = self.observation()
+            if self.camera_map is not None:
+                observation = self._through_camera(observation)
             if self.cfg.observation_noise is not None:
                 observation = corrupt(observation, self.cfg.observation_noise)
             self._planner_observation = observation
         return self._planner_observation
+
+    def _through_camera(self, observation: Observation) -> Observation:
+        """The terrain as the front camera's map knows it, after fusing this step's frame."""
+        pose = self.io.base_pose()
+        feet_z = self.io.robot.data.body_link_pos_w.torch[:, self.io.foot_ids, 2]
+        self.camera_map.update(pose[:, :3], pose[:, 3:], feet_z.mean(dim=1))
+        known, error = self.camera_map.lookup(self.io.terrain_points_xy())
+        heights = observation.terrain.heights
+        heights = torch.where(known, heights + error, torch.full_like(heights, float("-inf")))
+        return Observation(observation.state, TerrainPatch(heights=heights, grid=observation.terrain.grid))
 
     def process_actions(self, actions: torch.Tensor):
         # the robots are about to move
@@ -163,4 +181,6 @@ class FootstepControlAction(ActionTerm):
         for footsteps in self._footsteps:
             footsteps.active[ids] = False
         self.controller.reset(ids)
+        if self.camera_map is not None:
+            self.camera_map.reset(ids, self._env.scene.env_origins[ids, :2])
         self._planner_observation = None

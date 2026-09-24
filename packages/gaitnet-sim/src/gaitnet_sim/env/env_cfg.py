@@ -85,6 +85,7 @@ class ActionsCfg:
 
 
 _MAX_XY_VELOCITY = 0.2
+_MAX_LATERAL_VELOCITY = 0.05
 _MAX_YAW_RATE = 0.4
 
 
@@ -98,8 +99,11 @@ class CommandsCfg:
         heading_command=False,
         debug_vis=False,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-_MAX_XY_VELOCITY, _MAX_XY_VELOCITY),
-            lin_vel_y=(-_MAX_XY_VELOCITY, _MAX_XY_VELOCITY),
+            # forward, a little sideways, and turning: the robot maps terrain with one front
+            # camera, so walking backward or sideways leaves the feet on ground it never saw
+            # (with env.actions.footstep.front_camera=None, widen these as needed)
+            lin_vel_x=(0.0, _MAX_XY_VELOCITY),
+            lin_vel_y=(-_MAX_LATERAL_VELOCITY, _MAX_LATERAL_VELOCITY),
             ang_vel_z=(-_MAX_YAW_RATE, _MAX_YAW_RATE),
         ),
     )
@@ -243,6 +247,7 @@ class GaitNetEnvCfg(ManagerBasedRLEnvCfg):
         self.events.add_base_mass = None
         self.events.push_robot = None
         self.actions.footstep.observation_noise = None
+        self.actions.footstep.front_camera = None
 
 
 @configclass

@@ -9,6 +9,7 @@ from isaaclab_tasks.utils import preset
 from gaitnet_sim import robot as go1
 from gaitnet_sim.controllers import BatchedMpcControllerCfg, PooledMpcControllerCfg
 from gaitnet_sim.env.noise import ObservationNoiseCfg
+from gaitnet_sim.env.perception import FrontCameraCfg
 from gaitnet_sim.env.scene import SCANNER_NAMES
 
 
@@ -34,6 +35,10 @@ class FootstepControlActionCfg(ActionTermCfg):
     duration is a Gaussian sample around a mean inside that range, and its tails reached zero
     or below, which started steps that never swung. The log-probability still uses the sample
     as drawn (the usual clipped-action treatment)."""
+    front_camera: FrontCameraCfg | None = FrontCameraCfg()
+    """The planner's terrain as a front depth camera's elevation map knows it: cells never in
+    view are unknown, the rest carry fused depth error (`gaitnet_sim.env.perception`). None
+    for the ray casters' exact heights everywhere."""
     observation_noise: ObservationNoiseCfg | None = ObservationNoiseCfg()
     """Noise on the planner's view of the robot (`planner_observation`), None for the truth."""
 

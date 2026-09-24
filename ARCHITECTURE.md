@@ -173,7 +173,7 @@ candidates you draw.
 flowchart LR
     subgraph env["Isaac Lab ManagerBasedRLEnv"]
         io["RobotIO<br/>joints, contacts, 4 ray scanners"]
-        noise["observation noise"]
+        noise["front camera map<br/>+ observation noise"]
         og["<b>observation groups</b><br/>state · candidates<br/>terrain · privileged · base_command"]
         act["<b>footstep action term</b><br/>owns the controller,<br/>executes leg/target/duration + nudge"]
         rew["rewards, terminations,<br/>terrain curriculum"]
