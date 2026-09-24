@@ -23,7 +23,7 @@ N, K = 3, 8
 NETWORK = {"class_name": "CandidateScorer", "shared_sizes": [16, 16], "candidate_sizes": [8, 8], "trunk_sizes": [16, 16]}
 
 
-def write_run(tmp_path, actor: GaitNetActor, actor_groups=("state",), network=NETWORK, observers=None):
+def write_run(tmp_path, actor: GaitNetActor, actor_groups=("state",), network=NETWORK, observers=None, **actor_cfg):
     env = {
         # tuples as yaml.dump writes them, like Isaac Lab's dump_yaml
         "gaitnet": {"robot": "go1", "grid_resolution": 0.02, "grid_size": (21, 21), "grid_border": 3,
@@ -38,7 +38,7 @@ def write_run(tmp_path, actor: GaitNetActor, actor_groups=("state",), network=NE
     }
     agent = {
         "obs_groups": {"actor": list(actor_groups), "critic": ["state"]},
-        "actor": {"network": dict(network), "observers": dict(observers or {})},
+        "actor": {"network": dict(network), "observers": dict(observers or {}), **actor_cfg},
     }
     (tmp_path / "params").mkdir()
     (tmp_path / "params" / "env.yaml").write_text(yaml.dump(env))
@@ -47,11 +47,11 @@ def write_run(tmp_path, actor: GaitNetActor, actor_groups=("state",), network=NE
         torch.save({"actor_state_dict": actor.state_dict(), "iter": iteration, "infos": None}, tmp_path / f"model_{iteration}.pt")
 
 
-def make_actor() -> tuple[GaitNetActor, TensorDict]:
+def make_actor(**kwargs) -> tuple[GaitNetActor, TensorDict]:
     state_dim = feature_dim(DEFAULT_FEATURES, ROBOTS["go1"].num_legs)
     candidates = Candidates(xyz=torch.randn(N, 4, K, 3) * 0.1, valid=torch.rand(N, 4, K) < 0.8, log_q=torch.zeros(N, 4, K))
     obs = TensorDict({"state": torch.randn(N, state_dim), "candidates": candidates.pack()}, batch_size=[N])
-    actor = GaitNetActor(obs, {"actor": ["state"]}, "actor", action_layout.DIM, network=dict(NETWORK), duration_std=0.07)
+    actor = GaitNetActor(obs, {"actor": ["state"]}, "actor", action_layout.DIM, network=dict(NETWORK), **{"duration_std": 0.07, **kwargs})
     return actor, obs
 
 
@@ -74,6 +74,14 @@ def test_bundle_scores_like_the_actor(tmp_path):
     assert torch.equal(expected.step_logits, got.step_logits)
     assert torch.equal(expected.noop_logit, got.noop_logit)
     assert torch.equal(expected.duration, got.duration)
+
+
+def test_bundle_duration_std_includes_the_actors_floor(tmp_path):
+    actor, _ = make_actor(duration_std_floor=0.02)
+    with torch.no_grad():
+        actor.duration_log_std.fill_(-30.0)
+    write_run(tmp_path, actor, duration_std_floor=0.02)
+    assert bundle_from_run(tmp_path).duration_std == pytest.approx(float(actor.duration_std)) == pytest.approx(0.02)
 
 
 def test_bundle_carries_the_observers(tmp_path):

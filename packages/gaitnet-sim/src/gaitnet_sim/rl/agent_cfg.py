@@ -84,6 +84,7 @@ class GaitNetActorCfg:
     observers = preset(default={}, slowdown=SLOWDOWN_OBSERVERS)
     base_command_group: str = "base_command"
     duration_std: float = 0.05
+    duration_std_floor: float = 0.01
     # Isaac Lab's cfg handling reads these on every model cfg; the actor's distribution is fixed
     distribution_cfg: None = None
     stochastic: bool = False

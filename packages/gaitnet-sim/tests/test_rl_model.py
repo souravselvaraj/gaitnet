@@ -185,3 +185,18 @@ def test_rejects_distribution_cfg():
             network={"class_name": "CandidateScorer"},
             distribution_cfg={"class_name": "GaussianDistribution"},
         )
+
+
+def test_duration_std_starts_at_its_initial_value_and_never_drops_below_the_floor():
+    from gaitnet_sim.rl.model import GaitNetActor
+
+    obs = fake_obs(("state", "candidates"))
+    actor = GaitNetActor(obs, {"actor": ["state"]}, "actor", action_layout.DIM, network=dict(SCORER),
+                         duration_std=0.05, duration_std_floor=0.01)
+    assert float(actor.duration_std) == pytest.approx(0.05)
+    with torch.no_grad():
+        actor.duration_log_std.fill_(-30.0)
+    assert float(actor.duration_std) == pytest.approx(0.01)
+    with pytest.raises(ValueError):
+        GaitNetActor(obs, {"actor": ["state"]}, "actor", action_layout.DIM, network=dict(SCORER),
+                     duration_std=0.01, duration_std_floor=0.01)

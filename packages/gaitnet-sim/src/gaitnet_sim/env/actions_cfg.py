@@ -29,6 +29,11 @@ class FootstepControlActionCfg(ActionTermCfg):
     apply_nudge: bool = True
     """Add the action's nudge to the command. The nudge is zero unless a feedback observer
     produced one."""
+    clamp_duration: bool = True
+    """Clamp each executed swing duration to the robot's `swing_duration_range`. The policy's
+    duration is a Gaussian sample around a mean inside that range, and its tails reached zero
+    or below, which started steps that never swung. The log-probability still uses the sample
+    as drawn (the usual clipped-action treatment)."""
     observation_noise: ObservationNoiseCfg | None = ObservationNoiseCfg()
     """Noise on the planner's view of the robot (`planner_observation`), None for the truth."""
 

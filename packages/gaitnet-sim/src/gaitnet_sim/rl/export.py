@@ -99,7 +99,9 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
     saved = torch.load(run_dir / checkpoint, map_location="cpu", weights_only=False)
     actor_state = saved["actor_state_dict"]
     network.load_state_dict({key.removeprefix("network."): value for key, value in actor_state.items() if key.startswith("network.")})
-    duration_std = float(actor_state["duration_log_std"].exp())
+    # the same std the actor sampled with; runs from before the floor existed have none
+    floor = float(agent["actor"].get("duration_std_floor", 0.0))
+    duration_std = float(actor_state["duration_log_std"].exp()) + floor
 
     run_id_file = run_dir / RUN_ID_FILE
     linked = {"mlflow_run_id": run_id_file.read_text().strip()} if run_id_file.is_file() else {}

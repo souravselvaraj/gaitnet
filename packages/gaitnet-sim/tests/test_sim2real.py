@@ -87,3 +87,34 @@ def test_training_randomizes_and_play_mode_does_not():
     assert env.events.add_base_mass is None and env.events.push_robot is None
     assert env.events.physics_material.params["static_friction_range"] == (1.0, 1.0)
     assert env.events.physics_material.params["dynamic_friction_range"] == (1.0, 1.0)
+
+
+def test_action_term_clamps_executed_durations_but_not_the_stored_action():
+    from types import SimpleNamespace
+
+    from gaitnet_core import action_layout
+    from gaitnet_core.action_layout import NO_STEP_LEG
+    from gaitnet_core.interfaces import FootstepCommand
+    from gaitnet_core.robot_spec import GO1
+    from gaitnet_sim.env.actions import FootstepControlAction
+
+    sent = []
+    term = FootstepControlAction.__new__(FootstepControlAction)
+    term.cfg = SimpleNamespace(clamp_duration=True, apply_nudge=True)
+    term.spec = GO1
+    term.controller = SimpleNamespace(
+        command_footsteps=lambda footsteps: sent.append(footsteps.duration.clone()), close=lambda: None
+    )
+    term._raw_actions = torch.zeros(4, action_layout.DIM)
+    term._nudge = torch.zeros(4, 3)
+    term._footsteps = FootstepCommand.none(4, device="cpu")
+    term._planner_observation = None
+
+    actions = torch.zeros(4, action_layout.DIM)
+    actions[:, 1] = torch.tensor([-0.05, 0.02, 0.2, 0.45])  # duration
+    actions[:, 2] = torch.tensor([0.0, 1.0, 2.0, NO_STEP_LEG])  # leg; the last robot holds
+    term.process_actions(actions)
+
+    low, high = GO1.swing_duration_range
+    assert sent[0][:3].tolist() == pytest.approx([low, low, 0.2])
+    assert term.raw_actions[:, 1].tolist() == pytest.approx(actions[:, 1].tolist())

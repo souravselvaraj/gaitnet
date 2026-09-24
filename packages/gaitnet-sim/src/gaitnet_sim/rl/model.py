@@ -44,6 +44,7 @@ class GaitNetActor(nn.Module):
         observers: dict[str, dict] | None = None,
         base_command_group: str = "base_command",
         duration_std: float = 0.05,
+        duration_std_floor: float = 0.0,
         distribution_cfg: dict | None = None,
     ):
         """
@@ -61,6 +62,9 @@ class GaitNetActor(nn.Module):
                 which observers need
             duration_std: initial swing duration noise (s), then learned; unused when the
                 network has a `fixed_duration`
+            duration_std_floor: the learned noise never goes below this (s). The duration
+                noise gets no entropy bonus, so without a floor PPO shrinks it until the
+                duration stops exploring (runs ended at 1-6 ms).
             distribution_cfg: must be None. Isaac Lab's runner cfg gives every model this key;
                 this model's distribution is fixed by the candidates.
         """
@@ -104,13 +108,16 @@ class GaitNetActor(nn.Module):
                 " e.g. presets=slowdown"
             )
 
-        # log-parameterized so it stays positive
-        self.duration_log_std = nn.Parameter(torch.tensor(math.log(duration_std)))
+        if not duration_std > duration_std_floor >= 0.0:
+            raise ValueError(f"need duration_std {duration_std} > duration_std_floor {duration_std_floor} >= 0")
+        # the part above the floor, log-parameterized so it stays positive; starts at duration_std
+        self.duration_std_floor = float(duration_std_floor)
+        self.duration_log_std = nn.Parameter(torch.tensor(math.log(duration_std - duration_std_floor)))
         self.distribution: FootstepDistribution | None = None
 
     @property
     def duration_std(self) -> torch.Tensor:
-        return self.duration_log_std.exp()
+        return self.duration_log_std.exp() + self.duration_std_floor
 
     def forward(
         self,

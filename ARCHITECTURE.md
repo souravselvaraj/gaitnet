@@ -184,6 +184,12 @@ the planner samples for itself. Same sampler code either way.
 `choice_index` and `duration` are what log-probabilities are computed from; `leg`, `target`
 and `nudge` are what the environment executes. The env never needs the candidate set.
 
+The swing duration is a Gaussian around the network's mean, with one learned std that has a
+floor (`agent.actor.duration_std_floor`, 0.01 s) because it gets no entropy bonus and otherwise
+shrinks to nothing. The env clamps the duration it executes to the robot's
+`swing_duration_range` (`env.actions.footstep.clamp_duration`); the log-probability keeps the
+sample as drawn. Exported bundles record the std including the floor.
+
 Observers are part of the environment's *dynamics*, not the policy: the nudge is in the
 action vector but log-probabilities ignore it, and observers only run with gradients off so
 PPO's update passes don't advance their memory.

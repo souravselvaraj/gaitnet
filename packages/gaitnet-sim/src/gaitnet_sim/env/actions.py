@@ -129,7 +129,10 @@ class FootstepControlAction(ActionTerm):
         self._footsteps.active[:] = footsteps.active
         self._footsteps.leg[:] = footsteps.leg
         self._footsteps.target[:] = footsteps.target
-        self._footsteps.duration[:] = footsteps.duration
+        duration = footsteps.duration
+        if self.cfg.clamp_duration:
+            duration = duration.clamp(*self.spec.swing_duration_range)
+        self._footsteps.duration[:] = torch.where(footsteps.active, duration, footsteps.duration)
         if self.cfg.apply_nudge:
             self._nudge[:] = action.nudge
         self.controller.command_footsteps(self._footsteps)
