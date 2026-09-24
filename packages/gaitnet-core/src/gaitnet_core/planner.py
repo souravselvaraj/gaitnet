@@ -36,6 +36,18 @@ class FootholdRules:
     """A leg may only lift off if this many legs stay in stance."""
     max_steps_per_tick: int = 1
     """Footsteps a robot may start in one planning tick, chosen one after another."""
+    min_stance_time: float = 0.0
+    """A leg may only lift off after this long in scheduled stance (s): a controller needs a
+    few solves with the foot loaded before it can shift weight off it again."""
+    min_foot_separation: float = 0.0
+    """Footholds closer than this to another foot, horizontally, are invalid (m); the legs
+    would collide."""
+    midline_margin: float | None = None
+    """If set, a leg's footholds must stay at least this far on its own side of the base's
+    centre line (m): legs may not cross under the body. None allows crossing."""
+    max_reach: float | None = None
+    """If set, footholds farther than this from the hip (m, 3D, at the terrain height) are
+    invalid: the grid's corners lie beyond the leg's length."""
 
     def valid(self, observation: Observation, spec: RobotSpec) -> torch.Tensor:
         """(N, L, *grid.size) cells each leg may step to this tick."""
@@ -46,8 +58,32 @@ class FootholdRules:
             step_threshold=self.step_threshold,
             edge_margin=self.edge_margin,
         )
-        legs = step_eligible(observation.state.gait_timing, self.min_stance_after_step)
-        return cells & legs.unsqueeze(-1).unsqueeze(-1)
+        legs = step_eligible(observation.state.gait_timing, self.min_stance_after_step, self.min_stance_time)
+        return cells & legs.unsqueeze(-1).unsqueeze(-1) & self.kinematic(observation, spec)
+
+    def kinematic(self, observation: Observation, spec: RobotSpec) -> torch.Tensor:
+        """(N, L, *grid.size) cells the leg can reach without meeting another leg: the foot
+        separation, midline and reach rules (all True with their defaults)."""
+        grid = observation.terrain.grid
+        heights = inner_heights(observation.terrain.heights, grid)
+        n, legs = heights.shape[:2]
+        ok = torch.ones_like(heights, dtype=torch.bool)
+        cells = grid.cell_centers(device=heights.device)  # (*size, 2), hip frame
+        hips = torch.tensor(spec.hip_offsets, device=heights.device, dtype=cells.dtype)[:, :2]  # (L, 2)
+        # footholds in the base's yaw frame, where foot_pos is: (L, *size, 2)
+        footholds = hips.view(legs, 1, 1, 2) + cells
+        if self.min_foot_separation > 0:
+            feet = observation.state.foot_pos[..., :2]  # (N, L, 2)
+            gap = (footholds.unsqueeze(0).unsqueeze(-2) - feet.view(n, 1, 1, 1, legs, 2)).norm(dim=-1)
+            others = ~torch.eye(legs, dtype=torch.bool, device=heights.device).view(1, legs, 1, 1, legs)
+            ok &= ~((gap < self.min_foot_separation) & others).any(dim=-1)
+        if self.midline_margin is not None:
+            side = torch.sign(hips[:, 1]).view(legs, 1, 1)
+            ok &= (side * footholds[..., 1] >= self.midline_margin).unsqueeze(0)
+        if self.max_reach is not None:
+            reach = torch.sqrt(cells.square().sum(dim=-1) + heights.square())
+            ok &= reach <= self.max_reach
+        return ok
 
 
 @dataclass

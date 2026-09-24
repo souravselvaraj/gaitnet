@@ -72,3 +72,44 @@ def test_step_eligibility():
     assert eligible[0].all()
     assert eligible[1].tolist() == [False, True, True, True]
     assert not eligible[2].any()
+
+
+def test_min_stance_time_keeps_a_just_landed_leg_down():
+    from gaitnet_core.eligibility import step_eligible
+
+    timing = torch.zeros(1, 4, 3)
+    timing[0, :, 2] = torch.tensor([0.02, 0.2, 0.2, 0.2])  # FL landed 20 ms ago
+    assert step_eligible(timing, 2, min_stance_time=0.08).tolist() == [[False, True, True, True]]
+    assert step_eligible(timing, 2).all()
+
+
+def test_kinematic_rules():
+    from conftest import make_observation
+    from gaitnet_core.planner import FootholdRules
+    from gaitnet_core.robot_spec import GO1
+
+    obs = make_observation(1)
+    grid = obs.terrain.grid
+    centres = grid.cell_centers()
+    hips = torch.tensor(GO1.hip_offsets)[:, :2]
+    # every foot a little outside its own hip, except FR's, right under FL's hip
+    obs.state.foot_pos[0, :, :2] = hips + torch.tensor([0.0, 0.08]) * torch.sign(hips[:, 1:2])
+    obs.state.foot_pos[0, 1, :2] = hips[0]
+    rules = FootholdRules(min_foot_separation=0.06)
+    ok = rules.kinematic(obs, GO1)[0]
+    near_fr = centres.norm(dim=-1) < 0.06  # FL's cells within 6 cm of FL's hip = of FR's foot
+    assert not ok[0][near_fr].any() and ok[0][~near_fr].all()
+    # FR's own foot (under FL's hip) doesn't block FR; FL's foot, which FR's grid reaches, does
+    fl_foot = obs.state.foot_pos[0, 0, :2]
+    near_fl = (hips[1] + centres - fl_foot).norm(dim=-1) < 0.06
+    assert near_fl.any() and torch.equal(ok[1], ~near_fl)
+
+    rules = FootholdRules(midline_margin=0.02)
+    ok = rules.kinematic(obs, GO1)[0]
+    left_cells_y = hips[0, 1] + centres[..., 1]
+    assert torch.equal(ok[0], left_cells_y >= 0.02)
+    assert torch.equal(ok[1], -(hips[1, 1] + centres[..., 1]) >= 0.02)
+
+    obs.terrain.heights[:] = -0.38  # a step down: the grid's corners are out of reach
+    ok = FootholdRules(max_reach=0.40).kinematic(obs, GO1)[0, 0]
+    assert ok[12, 12] and not ok[0, 0] and not ok[24, 24]
