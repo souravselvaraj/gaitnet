@@ -2,9 +2,10 @@
 
 Sits after `Evaluator` (which produces the per-robot rows) and before nothing: it turns those
 rows into what is compared between policies. A robot succeeded if its episode reached the time
-limit (`truncated`) instead of being terminated, and the headline `survival_mean` is the mean of
-the per-(difficulty, velocity) success rates, so every cell of the sweep weighs the same however
-many robots it held. Needs no simulator.
+limit. Walking off the side of its 1 m wide row also ends an episode as a time-out
+(`truncated`), but it is not success: it is counted apart, as `exited`. The headline
+`survival_mean` is the mean of the per-(difficulty, velocity) success rates, so every cell of the
+sweep weighs the same however many robots it held. Needs no simulator.
 """
 
 from __future__ import annotations
@@ -17,46 +18,65 @@ Rows = list[dict]
 `trial`, `env`, `distance` (m), `steps`, `truncated` (0/1) and `terminated_by`."""
 
 
+EXIT_TERMS = ("terrain_out_of_bounds",)
+"""Terminations that end an episode as a time-out without the robot having succeeded: in the
+evaluation scene, leaving the robot's own sub-terrain."""
+
+
 def _mean(values: list[float]) -> float:
-    return sum(values) / len(values)
+    return sum(values) / len(values) if values else float("nan")
+
+
+def _exited(row: dict) -> bool:
+    return row["terminated_by"] in EXIT_TERMS
+
+
+def _survived(row: dict) -> bool:
+    return bool(int(row["truncated"])) and not _exited(row)
 
 
 def cells(rows: Rows, step_dt: float) -> dict[tuple[float, float], dict[str, float]]:
-    """Per (difficulty, velocity): `survival` (fraction that reached the time limit) and
-    `distance_ratio`, the mean of distance walked over distance commanded (velocity times the
-    time the robot's episode lasted, `steps * step_dt` seconds)."""
+    """Per (difficulty, velocity): `survival` (fraction that reached the time limit), `exited`
+    (fraction that walked off their row) and, for a nonzero command, `distance_ratio`: the mean
+    of distance walked over distance commanded (velocity times the time the robot's episode
+    lasted, `steps * step_dt` seconds)."""
     grouped: dict[tuple[float, float], list[dict]] = defaultdict(list)
     for row in rows:
         grouped[(row["difficulty"], row["velocity"])].append(row)
-    return {
-        key: {
-            "survival": _mean([float(row["truncated"]) for row in group]),
-            "distance_ratio": _mean(
-                [row["distance"] / (key[1] * row["steps"] * step_dt) for row in group if row["steps"] > 0]
-            ),
+    per_cell = {}
+    for key, group in sorted(grouped.items()):
+        cell = {
+            "survival": _mean([float(_survived(row)) for row in group]),
+            "exited": _mean([float(_exited(row)) for row in group]),
         }
-        for key, group in sorted(grouped.items())
-    }
+        if key[1] > 0:
+            cell["distance_ratio"] = _mean(
+                [row["distance"] / (key[1] * row["steps"] * step_dt) for row in group if row["steps"] > 0]
+            )
+        per_cell[key] = cell
+    return per_cell
 
 
 def summarize(rows: Rows, step_dt: float) -> dict[str, float]:
     """The metrics logged to MLflow, keyed by name.
 
-    `survival_mean` and `distance_ratio_mean` average the cells (see module docstring),
-    `survival/d<difficulty>_v<velocity>` and `distance_ratio/d<...>_v<...>` are the cells, and
-    `terminated/<term>` is the fraction of all robots ended by each termination (`truncated`
-    for the time limit)."""
+    `survival_mean`, `exited_mean` and `distance_ratio_mean` average the cells (see module
+    docstring; zero-velocity cells have no distance ratio), `survival/d<difficulty>_v<velocity>`
+    and so on are the cells, and `terminated/<term>` is the fraction of all robots ended by
+    each termination (`truncated` for rows that name none)."""
     per_cell = cells(rows, step_dt)
     metrics = {
         "survival_mean": _mean([cell["survival"] for cell in per_cell.values()]),
-        "distance_ratio_mean": _mean([cell["distance_ratio"] for cell in per_cell.values()]),
+        "exited_mean": _mean([cell["exited"] for cell in per_cell.values()]),
+        "distance_ratio_mean": _mean([cell["distance_ratio"] for cell in per_cell.values() if "distance_ratio" in cell]),
     }
     for (difficulty, velocity), cell in per_cell.items():
         for name, value in cell.items():
             metrics[f"{name}/d{difficulty:g}_v{velocity:g}"] = value
     for reason, count in Counter(row["terminated_by"] or "truncated" for row in rows).items():
         metrics[f"terminated/{reason}"] = count / len(rows)
-    return metrics
+    # e.g. no distance ratio when every command was zero
+    return {name: value for name, value in metrics.items() if value == value}
 
 
 def plot(rows: Rows, step_dt: float, title: str = ""):
@@ -77,7 +97,7 @@ def plot(rows: Rows, step_dt: float, title: str = ""):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     for ax, name, label in zip(axes, ("survival", "distance_ratio"), ("Success rate", "Distance / commanded")):
         for velocity, color in zip(velocities, colors):
-            xs = [d for d in difficulties if (d, velocity) in per_cell]
+            xs = [d for d in difficulties if name in per_cell.get((d, velocity), {})]
             ys = [per_cell[(d, velocity)][name] for d in xs]
             ax.plot(xs, ys, marker="o", linewidth=2, markersize=6, color=color, label=f"{velocity:g} m/s")
             if name == "survival":

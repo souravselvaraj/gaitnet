@@ -34,8 +34,8 @@ ROWS = [
 
 def test_cells():
     per_cell = report.cells(ROWS, STEP_DT)
-    assert per_cell[(0.0, 0.1)] == {"survival": 1.0, "distance_ratio": pytest.approx(0.75)}
-    assert per_cell[(0.2, 0.1)] == {"survival": 0.5, "distance_ratio": pytest.approx(0.75)}
+    assert per_cell[(0.0, 0.1)] == {"survival": 1.0, "exited": 0.0, "distance_ratio": pytest.approx(0.75)}
+    assert per_cell[(0.2, 0.1)] == {"survival": 0.5, "exited": 0.0, "distance_ratio": pytest.approx(0.75)}
 
 
 def test_summary_averages_cells_not_robots():
@@ -49,6 +49,27 @@ def test_terminations_are_fractions_of_all_robots():
     metrics = report.summarize(ROWS, STEP_DT)
     assert metrics["terminated/truncated"] == 0.75
     assert metrics["terminated/bad_height"] == 0.25
+
+
+def test_walking_off_the_row_is_not_survival():
+    # leaving the sub-terrain ends the episode as a time-out (truncated) but is counted apart
+    rows = [_row(0.0, 0.1, 0.5, 10, 1, "time_out"), _row(0.0, 0.1, 0.3, 6, 1, "terrain_out_of_bounds")]
+    cell = report.cells(rows, STEP_DT)[(0.0, 0.1)]
+    assert cell["survival"] == 0.5 and cell["exited"] == 0.5
+    metrics = report.summarize(rows, STEP_DT)
+    assert metrics["exited_mean"] == 0.5 and metrics["terminated/terrain_out_of_bounds"] == 0.5
+
+
+def test_zero_velocity_cells_have_no_distance_ratio():
+    rows = [_row(0.0, 0.0, 0.01, 10, 1, "time_out"), _row(0.0, 0.1, 0.5, 10, 1, "time_out")]
+    per_cell = report.cells(rows, STEP_DT)
+    assert "distance_ratio" not in per_cell[(0.0, 0.0)]
+    metrics = report.summarize(rows, STEP_DT)
+    assert metrics["distance_ratio_mean"] == pytest.approx(1.0)
+    assert "distance_ratio/d0_v0" not in metrics
+    only_standing = report.summarize(rows[:1], STEP_DT)
+    assert "distance_ratio_mean" not in only_standing and only_standing["survival_mean"] == 1.0
+    report.plot(rows, STEP_DT)
 
 
 def test_plot_has_a_line_per_velocity():

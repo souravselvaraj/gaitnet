@@ -58,12 +58,16 @@ def make_eval_env_cfg(
     envs_per_difficulty: int,
     terrain_length: float | None = None,
     randomize: bool = False,
+    seed: int | None = None,
+    allow_over_budget: bool = False,
 ) -> GaitNetEnvCfg:
     """Rewrite `env_cfg` (in place, and returned) for a sweep over `difficulties` x `velocities`.
 
     Args:
         randomize: keep training's randomization and observation noise; by default the
             sweep runs with nominal dynamics and exact observations (`play_mode`)
+        seed: terrain layout seed, so policies are compared on the same terrain
+        allow_over_budget: build a terrain over the collision-triangle budget anyway
     """
     apply_bundle_contract(env_cfg, bundle)
     if not randomize:
@@ -81,16 +85,20 @@ def make_eval_env_cfg(
         f" sub-terrains, ~{triangles / 1e6:.1f}M collision triangles"
     )
     if triangles > _TRIANGLE_BUDGET:
-        logger.warning(
-            f"~{triangles / 1e6:.1f}M collision triangles is over the {_TRIANGLE_BUDGET / 1e6:.1f}M known to work."
-            " If robots end on foot_below_ground at once, they are falling through the terrain:"
-            " lower --terrain_length or --envs_per_difficulty."
+        message = (
+            f"~{triangles / 1e6:.1f}M collision triangles is over the {_TRIANGLE_BUDGET / 1e6:.1f}M known to work;"
+            " beyond it robots fall through the terrain and end on foot_below_ground at once. Lower"
+            " --envs_per_difficulty or --terrain_length (and raise --trials for more robots per cell)."
         )
+        if not allow_over_budget:
+            raise ValueError(message)
+        logger.warning(message)
     make_eval_terrain(
         env_cfg.scene.terrain,
         difficulties=tuple(difficulties),
         envs_per_difficulty=envs_per_difficulty,
         sub_terrain_size=(terrain_length, 1.0),
+        seed=seed,
     )
     # each robot stays on its difficulty's row
     env_cfg.curriculum.terrain_levels = None

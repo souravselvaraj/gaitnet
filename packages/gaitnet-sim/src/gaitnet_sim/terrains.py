@@ -99,9 +99,11 @@ def make_eval_terrain(
     difficulties: tuple[float, ...],
     envs_per_difficulty: int,
     sub_terrain_size: tuple[float, float],
+    seed: int | None = None,
 ) -> None:
     """Rewrite `terrain` in place as a one-difficulty-per-row evaluation grid, keeping its
-    sub-terrain type, material and scales."""
+    sub-terrain type, material and scales. A `seed` makes the layout the same on every run,
+    so two policies can be compared on identical terrain."""
     from gaitnet_sim.terrain_generation import EvalTerrainImporter
 
     generator = terrain.terrain_generator
@@ -119,4 +121,5 @@ def make_eval_terrain(
         num_rows=len(difficulties),
         num_cols=envs_per_difficulty,
         difficulties=tuple(difficulties),
+        seed=seed,
     )

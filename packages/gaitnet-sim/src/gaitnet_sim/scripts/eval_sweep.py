@@ -33,8 +33,14 @@ parser.add_argument(
     "--difficulties", type=float, nargs="+", default=[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
 )
 parser.add_argument("--velocities", type=float, nargs="+", default=[0.05, 0.1, 0.15, 0.2])
-parser.add_argument("--envs_per_difficulty", type=int, default=50)
-parser.add_argument("--trials", type=int, default=1)
+# 9 x 20 robots on 10 m rows stays inside the terrain's triangle budget; 10 trials make 200
+# robots per (difficulty, velocity) cell, below which conclusions have not survived resampling
+parser.add_argument("--envs_per_difficulty", type=int, default=20)
+parser.add_argument("--trials", type=int, default=10)
+parser.add_argument("--seed", type=int, default=0, help="Seed of the terrain layout, spawns and sampling.")
+parser.add_argument(
+    "--allow_over_budget", action="store_true", help="Build a terrain over the collision-triangle budget anyway."
+)
 parser.add_argument("--terrain_length", type=float, default=None, help="Sub-terrain length (m); sized to the episode by default.")
 parser.add_argument("--episode_length_s", type=float, default=None, help="Episode length (s); the env's by default.")
 parser.add_argument("--sampler", default="dense", help="Candidate sampler (gaitnet_core.samplers.SAMPLERS).")
@@ -63,6 +69,7 @@ import time  # noqa: E402
 from collections import Counter  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 from isaaclab.envs import ManagerBasedRLEnv  # noqa: E402
@@ -93,7 +100,7 @@ logging.getLogger("gaitnet_sim").setLevel(logging.INFO)
 SETTINGS = {
     "task", "difficulties", "velocities", "envs_per_difficulty", "trials", "terrain_length",
     "episode_length_s", "sampler", "per_leg", "stochastic", "refine", "refine_steps",
-    "no_observers", "randomize",
+    "no_observers", "randomize", "seed",
 }  # fmt: skip
 
 COLUMNS = ["difficulty", "velocity", "trial", "env", "distance", "steps", "truncated", "terminated_by"]
@@ -123,6 +130,9 @@ def main() -> int:
         return 1
 
     env_cfg = parse_env_cfg(args_cli.task, device=device, overrides=hydra_overrides)
+    env_cfg.seed = args_cli.seed
+    np.random.seed(args_cli.seed)
+    torch.manual_seed(args_cli.seed)
     if args_cli.episode_length_s is not None:
         env_cfg.episode_length_s = args_cli.episode_length_s
     make_eval_env_cfg(
@@ -133,6 +143,8 @@ def main() -> int:
         envs_per_difficulty=args_cli.envs_per_difficulty,
         terrain_length=args_cli.terrain_length,
         randomize=args_cli.randomize,
+        seed=args_cli.seed,
+        allow_over_budget=args_cli.allow_over_budget,
     )
     env = ManagerBasedRLEnv(cfg=env_cfg)
     robot = IsaacRobot(env)

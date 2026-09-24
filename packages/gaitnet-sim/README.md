@@ -172,3 +172,10 @@ preset). Deploying a bundle on a robot is in [gaitnet-ros1](../gaitnet-ros1/READ
 experimental pieces: `--sampler` / `--per_leg` (the default is dense), `--refine` (gradient
 refinement of each footstep on the network's score, `--refine_steps`), `--stochastic`,
 `--no_observers`, and `--randomize` (training's randomization and noise instead of nominal).
+
+The defaults (20 robots per difficulty, 10 trials, `--seed 0`) give 200 robots per
+(difficulty, velocity) cell on the same terrain layout every run, inside the terrain's
+collision-triangle budget; a sweep over the budget stops unless given `--allow_over_budget`.
+Success means reaching the time limit. Walking off the side of the 1 m wide row also ends the
+episode as a time-out, but is reported apart as `exited`, not as survival. Distance is measured
+from each robot's spawn point, and zero-velocity cells have no distance ratio.
