@@ -64,6 +64,10 @@ class FootstepControlAction(ActionTerm):
         self._nudge = torch.zeros(self.num_envs, 3, device=self.device)
         self._footsteps = [FootstepCommand.none(self.num_envs, device=self.device) for _ in range(self.rounds)]
         self._planner_observation: Observation | None = None
+        self.episode_progress = torch.zeros(self.num_envs, device=self.device)
+        """(N,) distance walked this episode along the operator's command direction (m)."""
+        self.episode_commanded = torch.zeros(self.num_envs, device=self.device)
+        """(N,) distance the operator's command asked for this episode (m)."""
         self.camera_map = (
             FrontCameraMap(cfg.front_camera, self.num_envs, self.device) if cfg.front_camera is not None else None
         )
@@ -132,6 +136,17 @@ class FootstepControlAction(ActionTerm):
             self._planner_observation = observation
         return self._planner_observation
 
+    def _track_progress(self) -> None:
+        """Add one env step to the episode's walked and commanded distances: the base's
+        velocity along the operator's (vx, vy) command, and the command's speed."""
+        command = self.base_command()[:, :2]
+        speed = command.norm(dim=-1)
+        direction = command / speed.clamp(min=1e-6).unsqueeze(-1)
+        velocity = self.io.robot.data.root_link_lin_vel_b.torch[:, :2]
+        dt = self._env.step_dt
+        self.episode_progress += (velocity * direction).sum(dim=-1) * dt
+        self.episode_commanded += speed * dt
+
     def _through_camera(self, observation: Observation) -> Observation:
         """The terrain as the front camera's map knows it, after fusing this step's frame."""
         pose = self.io.base_pose()
@@ -145,6 +160,7 @@ class FootstepControlAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor):
         # the robots are about to move
         self._planner_observation = None
+        self._track_progress()
         # copied into the buffers made at init: tensors made here under torch.inference_mode
         # (RSL-RL, evaluation) would refuse the in-place updates of a later reset outside it
         self._raw_actions[:] = actions
@@ -183,4 +199,6 @@ class FootstepControlAction(ActionTerm):
         self.controller.reset(ids)
         if self.camera_map is not None:
             self.camera_map.reset(ids, self._env.scene.env_origins[ids, :2])
+        self.episode_progress[ids] = 0.0
+        self.episode_commanded[ids] = 0.0
         self._planner_observation = None

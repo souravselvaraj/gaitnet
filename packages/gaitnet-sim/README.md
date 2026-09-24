@@ -11,7 +11,11 @@ page covers what to change for an experiment.
 | `GaitNet-Holes` | flat ground with random holes | fraction of holes |
 | `GaitNet-Pillars` | square pillars at random heights over a void | gap width and height spread |
 
-Both train on a curriculum over difficulty rows and share everything but the terrain.
+Both train on a curriculum over difficulty rows and share everything but the terrain. A robot
+moves up a row (with probability 0.1) only if its episode ran to the time limit *and* it walked
+at least half the distance its command asked for (`env/curriculum.py`,
+`terrain_levels_progress`); a fall moves it down (0.5). Promoting on survival alone rewarded
+standing still.
 
 ## Presets
 

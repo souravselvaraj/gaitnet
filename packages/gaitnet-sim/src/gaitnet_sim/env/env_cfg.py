@@ -197,7 +197,7 @@ class EventsCfg:
 
 @configclass
 class CurriculumCfg:
-    terrain_levels = CurrTerm(func=curriculum.terrain_levels_survival)
+    terrain_levels = CurrTerm(func=curriculum.terrain_levels_progress)
 
 
 @configclass
