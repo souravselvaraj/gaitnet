@@ -167,7 +167,8 @@ Training runs are hardened by default:
   privileged observations read the truth.
 - **Front camera** (`env.actions.footstep.front_camera`, see `env/perception.py`): the
   terrain patches as a single forward depth camera's elevation map (a D435i, mounted as in
-  legged_perceptive) would know them. Each robot keeps a 3 cm map around its spawn; cells
+  legged_perceptive) would know them. Each robot keeps a 3 cm, 5 x 5 m map that rolls with
+  it, like the robot's elevation map; cells
   inside the camera's view are marked seen and get a depth error (4 mm x range²,
   inverse-variance fused over frames), and patch cells never seen read as unknown. The
   ground under the front feet is below the camera's view, so it is always memory, and ground
