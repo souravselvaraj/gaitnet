@@ -86,6 +86,26 @@ SLOWDOWN_OBSERVERS = {"step_confidence_slowdown": {"patience": 10, "margin": 0.0
 
 
 @configclass
+class ScheduledPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    """RSL-RL's PPO cfg plus `gaitnet_sim.rl.ppo.ScheduledPPO`'s schedules, see there."""
+
+    class_name: str = "gaitnet_sim.rl.ppo:ScheduledPPO"
+    lr_schedule: dict | None = None
+    """`{start, end, final[, shape]}` in iterations, None for a constant learning rate."""
+    entropy_schedule: dict | None = None
+    """The same for the entropy coefficient."""
+    policy_change_samples: int = 8192
+    """Transitions `approx_kl` and `clip_fraction` are measured on after each update."""
+
+
+LR_DECAY = {"start": 4000, "end": 8000, "final": 1e-5, "shape": "cosine"}
+"""Hold the learning rate to iteration 4000, then decay it to 1e-5 by 8000. The baseline's evals
+peaked near 5000 and drifted after; override per run, e.g. agent.algorithm.lr_schedule.end=9000."""
+ENTROPY_DECAY = {"start": 4000, "end": 8000, "final": 0.005, "shape": "linear"}
+"""Lower the entropy bonus from 0.02 to 0.005 over the same window, so the policy commits."""
+
+
+@configclass
 class GaitNetActorCfg:
     """Keyword arguments of `GaitNetActor`, see there."""
 
@@ -120,7 +140,9 @@ class GaitNetPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"actor": ["state"], "critic": preset(default=["state"], privileged=["state", "privileged"])}
     actor = GaitNetActorCfg()
     critic = RslRlMLPModelCfg(hidden_dims=[64] * 6, activation="relu", obs_normalization=False)
-    algorithm = RslRlPpoAlgorithmCfg(
+    algorithm = ScheduledPpoAlgorithmCfg(
+        lr_schedule=dict(LR_DECAY),
+        entropy_schedule=dict(ENTROPY_DECAY),
         value_loss_coef=0.5,
         use_clipped_value_loss=True,
         clip_param=0.3,
@@ -128,7 +150,7 @@ class GaitNetPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
         num_learning_epochs=8,
         num_mini_batches=4,
         learning_rate=3e-4,
-        schedule="fixed",
+        schedule="fixed",  # the lr_schedule above; see gaitnet_sim.rl.ppo for why not "adaptive"
         gamma=0.995,
         lam=0.95,
         desired_kl=0.01,  # only used by schedule="adaptive"

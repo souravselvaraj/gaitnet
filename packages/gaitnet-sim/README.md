@@ -156,7 +156,17 @@ presets=slowdown agent.actor.observers.step_confidence_slowdown.patience=5
 
 # PPO
 agent.algorithm.entropy_coef=0.01 agent.algorithm.learning_rate=1e-4
+
+# PPO schedules (gaitnet_sim.rl.ppo.ScheduledPPO): the learning rate and entropy bonus hold,
+# then decay over iterations 4000-8000 by default; move or reshape the window per run
+agent.algorithm.lr_schedule.end=9000 agent.algorithm.entropy_schedule.final=0.01
 ```
+
+Every PPO update also logs how far it moved the policy over the whole tick (every footstep):
+`Loss/approx_kl` (from the stored actions' log-probabilities) and `Loss/clip_fraction`, plus the
+scheduled `Loss/entropy_coef`. RSL-RL's KL-adaptive learning rate is not used: it raises the rate
+whenever an update's KL is under half its target, which a policy held stochastic by the entropy
+bonus mostly is, and its KL covers only a tick's first footstep.
 
 A value that is itself a preset (`agent.actor.network`, `agent.actor.observers`,
 `agent.obs_groups.critic`, the optional observation groups) can't be replaced whole with
