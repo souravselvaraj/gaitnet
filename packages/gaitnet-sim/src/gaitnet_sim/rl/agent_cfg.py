@@ -71,6 +71,9 @@ SMALL_CANDIDATE_SCORER = {
     "trunk_sizes": [64, 64],
 }
 """About a fifth of the default scorer's parameters (19k vs 103k), for a distilled onboard student."""
+SMALL_CROP_SCORER = {**SMALL_CANDIDATE_SCORER, "candidate_features": "xyz_crop", "grid": FOOTHOLD_GRID, "crop_radius": 2}
+"""The small scorer with the 5 x 5 cells of terrain around each candidate, for a student that has
+to see hole edges on the camera map."""
 FIXED_SWING_DURATION = 0.25
 """Swing duration (s) of the `swing_duration_ablation` preset, overridable as
 `agent.actor.network.fixed_duration=0.3`."""
@@ -195,7 +198,9 @@ class GaitNetDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     save_interval = 50
     experiment_name = "gaitnet_holes"
     obs_groups = {"student": ["state"], "teacher": ["teacher_state"]}
-    student = GaitNetActorCfg(network=SMALL_CANDIDATE_SCORER)
+    student = GaitNetActorCfg(network=preset(default=SMALL_CANDIDATE_SCORER, crop=SMALL_CROP_SCORER))
+    """`presets=distill,crop` gives the student the terrain around each candidate (and the env its
+    terrain group); the teacher needs neither, whatever its network."""
     teacher = GaitNetActorCfg(candidates_group="teacher_candidates")
     """The teacher's network, duration floor and state features are replaced by its run's."""
     algorithm = CandidateDistillationAlgorithmCfg()

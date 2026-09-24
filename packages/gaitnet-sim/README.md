@@ -75,7 +75,7 @@ The teacher's network, duration floor and state features come from its run's
 `params/agent.yaml`; the algorithm refuses a teacher trained with another number of
 footsteps per tick or other state features. Keep the env inside what the teacher was trained
 on (its command ranges, terrain), since its footsteps are the targets. The student is
-`SMALL_CANDIDATE_SCORER` (19k parameters, the default scorer has 103k) by default, `agent.student.network.*` to change it.
+`SMALL_CANDIDATE_SCORER` (19k parameters, the default scorer has 103k) by default; `presets=distill,crop` gives it the 5 x 5 cells of terrain around each candidate (`SMALL_CROP_SCORER`, 20k), and `agent.student.network.*` changes it further.
 `--checkpoint` resumes a distillation run (student, teacher, optimizer, DAgger schedule), and
 `export_bundle` exports its student. Logged: `Loss/kl` (and its categorical and duration
 parts), `Loss/agreement_gate` / `Loss/agreement_footstep` (the student's most likely first

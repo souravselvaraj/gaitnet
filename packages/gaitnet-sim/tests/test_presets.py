@@ -113,3 +113,19 @@ def test_cfg_modules_stay_free_of_usd():
         "sys.exit(1 if 'pxr' in sys.modules else 0)"
     )
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+def test_distillation_presets():
+    register()
+    env, agent = resolve_task_config("GaitNet-Holes", "rsl_rl_distill_cfg_entry_point", overrides=["presets=distill"])
+    assert env.observations.teacher_state is not None and env.observations.teacher_candidates is not None
+    assert env.observations.terrain is None
+    assert agent.student.network["candidate_features"] == "xyz"
+    assert agent.teacher.candidates_group == "teacher_candidates"
+
+    # the student sees the terrain around each candidate; the env adds the group it reads
+    env, agent = resolve_task_config("GaitNet-Holes", "rsl_rl_distill_cfg_entry_point", overrides=["presets=distill,crop"])
+    assert env.observations.terrain is not None and env.observations.teacher_candidates is not None
+    assert agent.student.network["candidate_features"] == "xyz_crop"
+    assert agent.student.network["shared_sizes"] == [64, 64]
+    assert FootholdGrid.from_dict(agent.student.network["grid"]) == env.gaitnet.foothold_grid()
