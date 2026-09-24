@@ -53,10 +53,26 @@ def step_taken(env: "ManagerBasedRLEnv", action_name: str = "footstep") -> torch
     return footstep_action(env, action_name).steps_started().float()
 
 
-def foot_slip(env: "ManagerBasedRLEnv", threshold: float = 1.0, action_name: str = "footstep") -> torch.Tensor:
-    """Sum over feet in contact of their horizontal speed (m/s)."""
-    io = footstep_action(env, action_name).io
+def foot_slip(
+    env: "ManagerBasedRLEnv",
+    threshold: float = 1.0,
+    settle_time: float = 0.04,
+    stance_only: bool = True,
+    action_name: str = "footstep",
+) -> torch.Tensor:
+    """Sum of the horizontal speed of feet that should be planted (m/s).
+
+    A foot counts if it is in contact (normal force over `threshold` N) and, with
+    `stance_only`, in the controller's scheduled stance for at least `settle_time` s. Feet that
+    are lifting off or still landing move by design; counting them charged every footstep a
+    slip cost on top of `step_taken`, which taught the policy to step less rather than to stop
+    feet sliding."""
+    term = footstep_action(env, action_name)
+    io = term.io
     forces = io.contact_sensor.data.net_normal_forces_w.torch[:, io.contact_ids]
-    in_contact = forces.norm(dim=-1) > threshold
+    planted = forces.norm(dim=-1) > threshold
+    if stance_only:
+        timing = term.controller.gait_timing()
+        planted = planted & (timing[..., 1] <= 0) & (timing[..., 2] >= settle_time)
     speed = io.robot.data.body_link_lin_vel_w.torch[:, io.foot_ids, :2].norm(dim=-1)
-    return torch.sum(in_contact * speed, dim=1)
+    return torch.sum(planted * speed, dim=1)
