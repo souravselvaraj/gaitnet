@@ -71,6 +71,16 @@ def feature_dim(names: tuple[str, ...] | list[str], num_legs: int) -> int:
     return sum(FEATURES[name].dim(num_legs) for name in names)
 
 
+def feature_slices(names: tuple[str, ...] | list[str], num_legs: int) -> dict[str, slice]:
+    """Where each named feature sits in the state vector `state_vector(state, names)`."""
+    slices, start = {}, 0
+    for name in names:
+        end = start + FEATURES[name].dim(num_legs)
+        slices[name] = slice(start, end)
+        start = end
+    return slices
+
+
 def state_vector(state: RobotState, names: tuple[str, ...] | list[str]) -> torch.Tensor:
     """(N, feature_dim) concatenation of the named features, in order."""
     return torch.cat([FEATURES[name].fn(state).float() for name in names], dim=-1)

@@ -1,8 +1,9 @@
 # AGENTS.md
 
 Greedy, CNN-based non-gaited footstep planning for dynamic quadruped locomotion. A policy
-scores candidate footholds each tick and picks at most one step; a convex MPC turns that
-footstep into torques. The same planner code runs in Isaac Lab and on a real robot.
+scores candidate footholds each tick and picks at most one step (or, with
+`max_steps_per_tick`, a few, chosen one after another); a convex MPC turns footsteps into
+torques. The same planner code runs in Isaac Lab and on a real robot.
 
 ## Layout
 

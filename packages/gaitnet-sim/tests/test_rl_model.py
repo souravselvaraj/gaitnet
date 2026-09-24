@@ -148,13 +148,15 @@ def test_actions_resolve_to_candidates():
     for stochastic in (True, False):
         with torch.inference_mode():
             action = EnvAction.decode(ppo.actor(obs, stochastic_output=stochastic))
-        is_step = action.leg != NO_STEP_LEG
+        assert action.rounds == 1
+        chosen, stepped_leg, stepped_target = action.choice_index[:, 0], action.leg[:, 0], action.target[:, 0]
+        is_step = stepped_leg != NO_STEP_LEG
         # a step's target is the chosen candidate, which must be valid
-        _, leg, target = candidates.gather(action.choice_index)
-        assert torch.equal(action.leg[is_step], leg[is_step])
-        assert torch.allclose(action.target[is_step], target[is_step])
+        _, leg, target = candidates.gather(chosen)
+        assert torch.equal(stepped_leg[is_step], leg[is_step])
+        assert torch.allclose(stepped_target[is_step], target[is_step])
         flat_valid = candidates.valid.flatten(1)[is_step]
-        assert flat_valid.gather(1, action.choice_index[is_step].unsqueeze(1)).all()
+        assert flat_valid.gather(1, chosen[is_step].unsqueeze(1)).all()
         assert (action.nudge == 0).all()
 
 
@@ -200,3 +202,76 @@ def test_duration_std_starts_at_its_initial_value_and_never_drops_below_the_floo
     with pytest.raises(ValueError):
         GaitNetActor(obs, {"actor": ["state"]}, "actor", action_layout.DIM, network=dict(SCORER),
                      duration_std=0.01, duration_std_floor=0.01)
+
+
+def rounds_obs() -> TensorDict:
+    """Observations with a real state vector (the actor edits its gait timing between rounds):
+    every leg in stance, so two legs may lift in one tick."""
+    from gaitnet_core.features import DEFAULT_FEATURES, state_vector
+    from gaitnet_core.state import RobotState
+
+    state = RobotState(
+        foot_pos=torch.randn(N, L, 3) * 0.05,
+        foot_vel=torch.zeros(N, L, 3),
+        base_lin_vel=torch.zeros(N, 3),
+        base_ang_vel=torch.zeros(N, 3),
+        projected_gravity=torch.tensor([0.0, 0.0, -1.0]).expand(N, 3).clone(),
+        contact=torch.ones(N, L, dtype=torch.bool),
+        gait_timing=torch.zeros(N, L, 3),
+        command=torch.rand(N, 3) * 0.2,
+        base_command=torch.rand(N, 3) * 0.2,
+    )
+    candidates = Candidates(xyz=torch.randn(N, L, K, 3) * 0.1, valid=torch.ones(N, L, K, dtype=torch.bool), log_q=torch.zeros(N, L, K))
+    return TensorDict({"state": state_vector(state, DEFAULT_FEATURES), "candidates": candidates.pack()}, batch_size=[N])
+
+
+class TwoRoundEnv(FakeEnv):
+    num_actions = action_layout.dim(2)
+
+    def get_observations(self) -> TensorDict:
+        return rounds_obs()
+
+
+def test_ppo_round_with_two_footsteps_per_tick():
+    torch.manual_seed(0)
+    cfg = {
+        "algorithm": {"class_name": "PPO", "num_learning_epochs": 2, "num_mini_batches": 2, "schedule": "fixed", "learning_rate": 3e-4},
+        "actor": {"class_name": "gaitnet_sim.rl.model:GaitNetActor", "network": dict(SCORER), "distribution_cfg": None},
+        "critic": {"class_name": "MLPModel", "hidden_dims": [32, 32], "activation": "relu"},
+        "obs_groups": {"actor": ["state"], "critic": ["state"]},
+        "num_steps_per_env": 6,
+        "multi_gpu": None,
+    }
+    ppo = PPO.construct_algorithm(rounds_obs(), TwoRoundEnv(), cfg, "cpu")
+    assert ppo.actor.rounds == 2
+    obs = rounds_obs()
+    two_steps = 0
+    for _ in range(6):
+        with torch.inference_mode():
+            actions = ppo.act(obs)
+            assert actions.shape == (N, action_layout.dim(2))
+            action = EnvAction.decode(actions)
+            both = (action.leg != NO_STEP_LEG).all(dim=1)
+            assert (action.leg[both, 0] != action.leg[both, 1]).all()
+            # a tick that stopped stays stopped
+            assert not ((action.leg[:, 0] == NO_STEP_LEG) & (action.leg[:, 1] != NO_STEP_LEG)).any()
+            two_steps += int(both.sum())
+            # the stored log-probability is what replaying the rounds gives
+            stored = ppo.transition.actions_log_prob
+            replay = ppo.actor
+            replay(obs)  # a fresh distribution, as in the update
+            assert torch.allclose(replay.get_output_log_prob(actions), stored, atol=1e-5)
+            obs = rounds_obs()
+            ppo.process_env_step(obs, torch.randn(N), torch.zeros(N, dtype=torch.bool), {})
+    assert two_steps > 0
+    with torch.inference_mode():
+        ppo.compute_returns(obs)
+    losses = ppo.update()
+    assert all(torch.isfinite(torch.tensor(v)) for v in losses.values()), losses
+
+
+def test_rounds_need_state_features_that_match_the_state():
+    from gaitnet_sim.rl.model import GaitNetActor
+
+    with pytest.raises(ValueError, match="gait timing"):
+        GaitNetActor(fake_obs(("state", "candidates")), {"actor": ["state"]}, "actor", action_layout.dim(2), network=dict(SCORER))

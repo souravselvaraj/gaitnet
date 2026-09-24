@@ -55,7 +55,7 @@ class PlannerRuntime:
         if self.postprocess is not None:
             plan = self.postprocess(plan, observation)
         nudge = combined_nudge(self.observers, plan, observation.state.base_command)
-        self.robot.command(plan.footstep_command(), nudge)
+        self.robot.command(plan.footstep_commands(), nudge)
         self.plan_durations.append(time.perf_counter() - start)
         return plan
 

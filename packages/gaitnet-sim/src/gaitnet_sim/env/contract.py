@@ -35,6 +35,9 @@ class GaitNetCfg:
     """Cells within this many cells of an edge are not valid footholds."""
     min_stance_after_step: int = 2
     """A leg may only lift off if this many legs stay in stance."""
+    max_steps_per_tick: int = 1
+    """Footsteps a robot may start in one planning tick, chosen one after another
+    (`gaitnet_core.rounds`). It sets the action's length, so the actor follows it."""
 
     def robot_spec(self) -> RobotSpec:
         return ROBOTS[self.robot]
@@ -49,4 +52,5 @@ class GaitNetCfg:
             step_threshold=self.step_threshold,
             edge_margin=self.edge_margin,
             min_stance_after_step=self.min_stance_after_step,
+            max_steps_per_tick=self.max_steps_per_tick,
         )

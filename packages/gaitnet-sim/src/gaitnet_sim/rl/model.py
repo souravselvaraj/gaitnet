@@ -3,13 +3,15 @@
 RSL-RL (5.x) builds each model as `class_name(obs, obs_groups, obs_set, output_dim, **cfg)`
 and PPO uses only the model's forward pass, its log-probability, entropy and distribution
 parameters. This model wraps any `gaitnet_core` scoring network and owns the candidate
-distribution (`gaitnet_core.selection.FootstepDistribution`), which needs the candidate set
-from the observation and so can't be one of RSL-RL's output distributions.
+distribution (`gaitnet_core.rounds.TickDistribution`), which needs the candidate set from the
+observation and so can't be one of RSL-RL's output distributions.
 
-Actions follow `gaitnet_core.action_layout`: the choice (candidate index, duration) that
-log-probabilities are computed from, the footstep it resolves to, which the environment
-executes, and the nudge of any feedback observers (zero without them). Observers are part
-of the environment's dynamics, not the policy: log-probabilities ignore the nudge.
+Actions follow `gaitnet_core.action_layout`: for each of the tick's rounds, the choice
+(candidate index, duration) that log-probabilities are computed from and the footstep it
+resolves to, which the environment executes; then the nudge of any feedback observers (zero
+without them). Observers are part of the environment's dynamics, not the policy:
+log-probabilities ignore the nudge. The number of rounds is read off the action length the
+environment asks for (its contract's `max_steps_per_tick`).
 """
 
 from __future__ import annotations
@@ -23,10 +25,12 @@ from tensordict import TensorDict
 from gaitnet_core import action_layout
 from gaitnet_core.action_layout import NO_STEP_LEG, EnvAction
 from gaitnet_core.candidates import Candidates
+from gaitnet_core.features import DEFAULT_FEATURES
 from gaitnet_core.networks import build_network, uses_terrain
 from gaitnet_core.observers import combined_nudge, make_observers
 from gaitnet_core.planner import plan_from_scores
-from gaitnet_core.selection import FootstepDistribution, Selection
+from gaitnet_core.robot_spec import GO1
+from gaitnet_core.rounds import StateEditor, TickDistribution, TickSelection
 
 
 class GaitNetActor(nn.Module):
@@ -45,6 +49,9 @@ class GaitNetActor(nn.Module):
         base_command_group: str = "base_command",
         duration_std: float = 0.05,
         duration_std_floor: float = 0.0,
+        state_features: list[str] | tuple[str, ...] = DEFAULT_FEATURES,
+        min_stance_after_step: int = 2,
+        duration_range: tuple[float, float] = GO1.swing_duration_range,
         distribution_cfg: dict | None = None,
     ):
         """
@@ -65,14 +72,17 @@ class GaitNetActor(nn.Module):
             duration_std_floor: the learned noise never goes below this (s). The duration
                 noise gets no entropy bonus, so without a floor PPO shrinks it until the
                 duration stops exploring (runs ended at 1-6 ms).
+            state_features: the features the state groups hold, in order; with several
+                footsteps per tick the actor rewrites their gait timing between rounds
+            min_stance_after_step: the env's foothold rule, re-applied every round
+            duration_range: executed swing durations are clamped to this, as the env does
             distribution_cfg: must be None. Isaac Lab's runner cfg gives every model this key;
                 this model's distribution is fixed by the candidates.
         """
         super().__init__()
         if distribution_cfg is not None:
             raise ValueError("GaitNetActor owns its distribution, leave distribution_cfg as None")
-        if output_dim != action_layout.DIM:
-            raise ValueError(f"GaitNetActor emits {action_layout.DIM}-dim actions, the environment expects {output_dim}")
+        self.rounds = action_layout.rounds_for_dim(output_dim)
         self.state_groups = list(obs_groups[obs_set])
         for group in self.state_groups:
             if obs[group].dim() != 2:
@@ -100,6 +110,18 @@ class GaitNetActor(nn.Module):
                     f" '{terrain_group}' group has {patch_size}; set the network's grid to the env's"
                 )
 
+        self.min_stance_after_step = int(min_stance_after_step)
+        self.duration_range = tuple(duration_range)
+        self.editor: StateEditor | None = None
+        if self.rounds > 1:
+            num_legs = obs[candidates_group].shape[1]
+            self.editor = StateEditor(tuple(state_features), num_legs)
+            if self.editor.state_dim != state_dim:
+                raise ValueError(
+                    f"state_features {list(state_features)} make {self.editor.state_dim} numbers, the state"
+                    f" groups {self.state_groups} hold {state_dim}; the actor needs them to find the gait timing"
+                )
+
         self.observers = make_observers(observers or {})
         self.base_command_group = base_command_group
         if self.observers and base_command_group not in obs.keys():
@@ -113,7 +135,7 @@ class GaitNetActor(nn.Module):
         # the part above the floor, log-parameterized so it stays positive; starts at duration_std
         self.duration_std_floor = float(duration_std_floor)
         self.duration_log_std = nn.Parameter(torch.tensor(math.log(duration_std - duration_std_floor)))
-        self.distribution: FootstepDistribution | None = None
+        self.distribution: TickDistribution | None = None
 
     @property
     def duration_std(self) -> torch.Tensor:
@@ -126,33 +148,56 @@ class GaitNetActor(nn.Module):
         hidden_state=None,
         stochastic_output: bool = False,
     ) -> torch.Tensor:
-        """(N, action_layout.DIM) actions, sampled or deterministic (two-stage select).
+        """(N, action_layout.dim(rounds)) actions, sampled or deterministic (two-stage select,
+        round by round).
 
         Observers run only when gradients are off, i.e. when acting (rollouts, play): PPO's
         update calls this again on stored observations, with gradients, only to recompute
-        log-probabilities, and that must not advance the observers' memory.
+        log-probabilities, and that must not advance the observers' memory. For the same
+        reason, with gradients on only the first round is sampled: the update ignores what
+        this returns and replays the stored rounds in `get_output_log_prob`.
         """
         state = torch.cat([obs[group] for group in self.state_groups], dim=-1)
         candidates = Candidates.unpack(obs[self.candidates_group])
         terrain = obs[self.terrain_group] if self.terrain_group is not None else None
-        scores = self.network(state, candidates, terrain)
         fixed = getattr(self.network, "fixed_duration", None) is not None
-        self.distribution = FootstepDistribution(scores, candidates, None if fixed else self.duration_std)
-        selection = self.distribution.sample() if stochastic_output else self.distribution.deterministic()
+        self.distribution = TickDistribution(
+            lambda s: self.network(s, candidates, terrain),
+            state,
+            candidates,
+            None if fixed else self.duration_std,
+            rounds=self.rounds,
+            min_stance_after_step=self.min_stance_after_step,
+            editor=self.editor,
+            duration_range=self.duration_range,
+        )
+        if stochastic_output and torch.is_grad_enabled() and self.rounds > 1:
+            first = self.distribution.first.sample()
+            noop = torch.full_like(first.index, candidates.noop_index)
+            selection = TickSelection(
+                index=torch.stack([first.index] + [noop] * (self.rounds - 1), dim=1),
+                duration=torch.stack([first.duration] + [torch.zeros_like(first.duration)] * (self.rounds - 1), dim=1),
+            )
+        elif stochastic_output:
+            selection = self.distribution.sample()
+        else:
+            selection = self.distribution.deterministic()
         nudge = None
         if self.observers and not torch.is_grad_enabled():
-            plan = plan_from_scores(scores, candidates, selection)
+            first = self.distribution.path[0]
+            plan = plan_from_scores(first.scores, first.candidates, first.selection)
             nudge = combined_nudge(self.observers, plan, obs[self.base_command_group]).command_delta
         return encode_selection(selection, candidates, nudge)
 
-    def _require_distribution(self) -> FootstepDistribution:
+    def _require_distribution(self) -> TickDistribution:
         if self.distribution is None:
             raise RuntimeError("call the model on an observation first")
         return self.distribution
 
     def get_output_log_prob(self, outputs: torch.Tensor) -> torch.Tensor:
         action = EnvAction.decode(outputs)
-        return self._require_distribution().log_prob(Selection(index=action.choice_index, duration=action.duration))
+        selection = TickSelection(index=action.choice_index, duration=action.duration)
+        return self._require_distribution().log_prob(selection)
 
     @property
     def output_entropy(self) -> torch.Tensor:
@@ -171,12 +216,14 @@ class GaitNetActor(nn.Module):
 
     @property
     def output_distribution_params(self) -> tuple[torch.Tensor, ...]:
-        """(log-probabilities over the flat action index, per-entry duration mean, duration std)."""
-        distribution = self._require_distribution()
-        n = distribution.candidates.num_robots
+        """(log-probabilities over the flat action index, per-entry duration mean, duration std)
+        of the first round, which is what `get_kl_divergence` compares (so with several
+        footsteps per tick the adaptive learning rate sees the first round only)."""
+        first = self._require_distribution().first
+        n = first.candidates.num_robots
         return (
-            distribution.categorical.logits,
-            distribution._duration_mean,
+            first.categorical.logits,
+            first._duration_mean,
             self.duration_std.expand(n, 1),
         )
 
@@ -222,14 +269,18 @@ class GaitNetActor(nn.Module):
         raise NotImplementedError("export a policy bundle instead, see gaitnet_sim.scripts.export_bundle")
 
 
-def encode_selection(selection: Selection, candidates: Candidates, nudge: torch.Tensor | None = None) -> torch.Tensor:
-    """The action vector for a selection: the choice, the footstep it resolves to, and the
-    (N, 3) nudge, zero if None."""
-    is_step, leg, target = candidates.gather(selection.index)
+def encode_selection(selection: TickSelection, candidates: Candidates, nudge: torch.Tensor | None = None) -> torch.Tensor:
+    """The action vector for a tick's choices: each round's choice and the footstep it
+    resolves to, then the (N, 3) nudge, zero if None."""
+    legs, targets = [], []
+    for r in range(selection.rounds):
+        is_step, leg, target = candidates.gather(selection.index[:, r])
+        legs.append(torch.where(is_step, leg, torch.full_like(leg, NO_STEP_LEG)))
+        targets.append(target)
     return EnvAction(
         choice_index=selection.index,
         duration=selection.duration,
-        leg=torch.where(is_step, leg, torch.full_like(leg, NO_STEP_LEG)),
-        target=target,
-        nudge=nudge if nudge is not None else torch.zeros_like(target),
+        leg=torch.stack(legs, dim=1),
+        target=torch.stack(targets, dim=1),
+        nudge=nudge if nudge is not None else torch.zeros_like(targets[0]),
     ).encode()

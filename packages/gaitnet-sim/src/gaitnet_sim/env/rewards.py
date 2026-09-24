@@ -48,8 +48,9 @@ def track_ang_vel_z_exp(
 
 
 def step_taken(env: "ManagerBasedRLEnv", action_name: str = "footstep") -> torch.Tensor:
-    """1 where the policy started a footstep this env step (rather than the no-op)."""
-    return footstep_action(env, action_name).footsteps.active.float()
+    """Footsteps the policy started this env step: 0 for the no-op, up to the contract's
+    `max_steps_per_tick`, so every step costs the same however many share a tick."""
+    return footstep_action(env, action_name).steps_started().float()
 
 
 def foot_slip(env: "ManagerBasedRLEnv", threshold: float = 1.0, action_name: str = "footstep") -> torch.Tensor:

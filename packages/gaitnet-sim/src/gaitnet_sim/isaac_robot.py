@@ -2,8 +2,8 @@
 the same `PlannerRuntime` as deployment.
 
 Observations come from the env's footstep action term. A command is one env step: the
-first footstep and the nudge go through the action vector, like a policy's; any further
-footsteps go straight to the low-level controller first.
+footsteps (as many as the env's rounds per tick) and the nudge go through the action vector,
+like a policy's; any further footsteps go straight to the low-level controller first.
 """
 
 from __future__ import annotations
@@ -43,15 +43,19 @@ class IsaacRobot:
         if isinstance(footsteps, FootstepCommand):
             footsteps = [footsteps]
         n, device = self.num_robots, self.env.device
-        first = footsteps[0] if footsteps else FootstepCommand.none(n, device)
-        for extra in footsteps[1:]:
+        # the env executes up to its rounds per tick through the action; any more go
+        # straight to the controller first
+        rounds = self.term.rounds
+        in_action = list(footsteps[:rounds])
+        for extra in footsteps[rounds:]:
             self.term.controller.command_footsteps(extra)
+        in_action += [FootstepCommand.none(n, device)] * (rounds - len(in_action))
         action = EnvAction(
             # the choice index only matters for training's log-probabilities
-            choice_index=torch.zeros(n, dtype=torch.long, device=device),
-            duration=first.duration,
-            leg=torch.where(first.active, first.leg, torch.full_like(first.leg, NO_STEP_LEG)),
-            target=first.target,
+            choice_index=torch.zeros(n, rounds, dtype=torch.long, device=device),
+            duration=torch.stack([f.duration for f in in_action], dim=1),
+            leg=torch.stack([torch.where(f.active, f.leg, torch.full_like(f.leg, NO_STEP_LEG)) for f in in_action], dim=1),
+            target=torch.stack([f.target for f in in_action], dim=1),
             nudge=nudge.command_delta if nudge is not None else torch.zeros(n, 3, device=device),
         )
         self.last_step = self.env.step(action.encode())

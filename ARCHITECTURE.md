@@ -18,8 +18,9 @@ of the whole thing.
 ## 1. The system
 
 A policy scores candidate footholds every planning tick and picks **at most one footstep**,
-or none. There is no gait: which leg swings, where it lands and for how long are all the
-policy's choice, made greedily one step at a time. A convex MPC turns each footstep into
+or none (by default; see [several footsteps per tick](#several-footsteps-per-tick)). There is
+no gait: which leg swings, where it lands and for how long are all the policy's choice, made
+greedily one step at a time. A convex MPC turns each footstep into
 joint torques. The same planner code runs in Isaac Lab and on a real robot, because both
 sides implement the same two protocols.
 
@@ -84,7 +85,7 @@ flowchart LR
     net["<b>scoring network</b><br/>CandidateScorer<br/>or DenseSpatialCNN"]
     sc["<b>Scores</b><br/>step_logits (N, L, K)<br/>noop_logit (N,)<br/>duration (N, L, K)"]
     sel["<b>selection</b><br/>f − log q − log N_valid<br/>leg first, then foothold"]
-    cmd["<b>FootstepCommand</b><br/>at most one step:<br/>leg, target, duration"]
+    cmd["<b>FootstepCommand</b><br/>at most one step per round:<br/>leg, target, duration"]
     ctl["<b>LowLevelController</b><br/>convex MPC + swing arc<br/>+ Cartesian PD"]
     tau["(N, 12) joint torques"]
 
@@ -119,6 +120,25 @@ Between steps 5 and 6, two optional pieces can run:
 network's score that moves the chosen foothold off the candidate set while staying on valid
 cells; and [**observers**](packages/gaitnet-core/src/gaitnet_core/observers.py), which look
 at the whole plan and nudge the controller's velocity command outside the learned policy.
+
+### Several footsteps per tick
+
+`max_steps_per_tick` (R) in the foothold rules (`env.gaitnet.max_steps_per_tick`, saved in the
+bundle) lets a tick start up to R footsteps, chosen one after another in *rounds*
+([rounds.py](packages/gaitnet-core/src/gaitnet_core/rounds.py)). Round 1 is the one-step
+policy. Each later round sees the state as it will be once the earlier rounds' legs have
+lifted off: their `gait_timing` reads as a swing of the chosen duration that has just begun.
+The leg rule is re-applied to that state, so a round can only step a leg still in stance, and
+only while `min_stance_after_step` legs stay down. Choosing the no-op ends the tick. Every round
+scores the same candidate set, sampled once per tick, with legs no longer eligible masked out,
+so a round costs one more network pass and no sampling.
+
+The tick's policy is the product of the rounds' conditionals: its log-probability is the sum
+over the rounds taken, and PPO recomputes it by replaying the stored choices, since round r
+depends only on the choices before it. The entropy bonus sums the rounds' categorical
+entropies along that path; the adaptive learning rate's KL compares the first round only.
+The actor can't read the env's contract, so it repeats `state_features` and
+`min_stance_after_step` (`agent.actor.*`), and export refuses a bundle where they disagree.
 
 ### The action space, and why logits get corrected
 
@@ -167,7 +187,7 @@ flowchart LR
     io --> noise --> og
     og --> actor
     og --> critic
-    actor -->|"9-dim action vector"| act
+    actor -->|"6R+3-dim action vector"| act
     act --> rew
     rew --> rl
 ```
@@ -180,9 +200,12 @@ then recompute log-probabilities on exactly the set the action was drawn from. A
 the planner samples for itself. Same sampler code either way.
 
 **The action vector carries both the choice and its consequence**
-([action_layout.py](packages/gaitnet-core/src/gaitnet_core/action_layout.py), 9 numbers):
-`choice_index` and `duration` are what log-probabilities are computed from; `leg`, `target`
-and `nudge` are what the environment executes. The env never needs the candidate set.
+([action_layout.py](packages/gaitnet-core/src/gaitnet_core/action_layout.py), 6R + 3
+numbers, 9 for one round): per round, `choice_index` and `duration` are what
+log-probabilities are computed from and `leg`, `target` are what the environment executes;
+then the `nudge`. The env never needs the candidate set, and starts the rounds' footsteps one
+after another (both controllers keep each leg's swing apart). `step_taken` counts steps, so
+every step costs the same however many share a tick.
 
 The swing duration is a Gaussian around the network's mean, with one learned std that has a
 floor (`agent.actor.duration_std_floor`, 0.01 s) because it gets no entropy bonus and otherwise
@@ -213,7 +236,8 @@ flowchart LR
 observations arrive (`rate_hz=None`) so the robot sets the pace; in the sim it ticks with the
 env. `FORMAT_VERSION` in [bundle.py](packages/gaitnet-core/src/gaitnet_core/bundle.py) is
 bumped when the *format* changes; a change to features, grid or network arguments invalidates
-existing bundles without a bump, and loading will say so.
+existing bundles without a bump, and loading will say so. Format 3 added
+`rules.max_steps_per_tick`; format 2 bundles still load, as one-footstep policies.
 
 ### The two low-level controllers
 

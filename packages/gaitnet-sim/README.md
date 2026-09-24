@@ -105,6 +105,11 @@ env.observations.candidates.candidates.params.sampler_kwargs.per_leg=32
 # foothold rules
 env.gaitnet.min_stance_after_step=3 env.gaitnet.edge_margin=1
 
+# several footsteps per tick, chosen in rounds (gaitnet_core.rounds). The actor takes the
+# number of rounds from the action length; it repeats the stance rule and state features, so
+# with a changed rule or state vector set agent.actor.min_stance_after_step / state_features too
+env.gaitnet.max_steps_per_tick=2
+
 # rewards
 env.rewards.step_taken.weight=-0.2 env.rewards.xy_tracking.params.command=base
 

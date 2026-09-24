@@ -88,6 +88,16 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
     candidates = env["observations"]["candidates"]["candidates"]["params"]
     train_sampler = {"name": candidates["sampler"], **(candidates.get("sampler_kwargs") or {})}
 
+    rules = contract.foothold_rules()
+    if rules.max_steps_per_tick > 1:
+        actor_cfg = agent["actor"]
+        if list(actor_cfg.get("state_features", features)) != list(features):
+            raise BundleError(f"the actor edited state features {actor_cfg['state_features']}, the env built {list(features)}")
+        if actor_cfg.get("min_stance_after_step", 2) != rules.min_stance_after_step:
+            raise BundleError(
+                f"the actor's later rounds kept {actor_cfg.get('min_stance_after_step', 2)} legs in stance, the"
+                f" env's rules {rules.min_stance_after_step}; set agent.actor.min_stance_after_step to match"
+            )
     grid = contract.foothold_grid()
     network_cfg = dict(agent["actor"]["network"])
     network_class = network_cfg.pop("class_name")

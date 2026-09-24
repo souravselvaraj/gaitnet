@@ -25,7 +25,10 @@ from gaitnet_core.planner import FootholdRules, FootstepPlanner
 from gaitnet_core.robot_spec import ROBOTS, RobotSpec
 from gaitnet_core.samplers import CandidateSampler, make_sampler
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
+READABLE_VERSIONS = (2, 3)
+"""Format 3 added `rules.max_steps_per_tick`; a format 2 bundle is a one-footstep-per-tick
+policy and loads with the default."""
 
 
 class BundleError(ValueError):
@@ -89,8 +92,11 @@ def save_bundle(path: str | Path, bundle: PolicyBundle) -> Path:
 
 def check_manifest(manifest: dict) -> None:
     """Raise BundleError if this code can't run the policy the manifest describes."""
-    if manifest.get("format_version") != FORMAT_VERSION:
-        raise BundleError(f"bundle format {manifest.get('format_version')}, this code reads {FORMAT_VERSION}")
+    if manifest.get("format_version") not in READABLE_VERSIONS:
+        raise BundleError(f"bundle format {manifest.get('format_version')}, this code reads {READABLE_VERSIONS}")
+    unknown = sorted(set(manifest["rules"]) - set(FootholdRules.__dataclass_fields__))
+    if unknown:
+        raise BundleError(f"unknown foothold rules {unknown}; the bundle is from newer or diverged code")
     if manifest["actor"]["class"] not in NETWORKS:
         raise BundleError(f"unknown network class {manifest['actor']['class']}")
     if manifest["robot"] not in ROBOTS:
@@ -98,6 +104,8 @@ def check_manifest(manifest: dict) -> None:
     unknown = [name for name in manifest["features"] if name not in FEATURES]
     if unknown:
         raise BundleError(f"unknown state features {unknown}")
+    if manifest["rules"].get("max_steps_per_tick", 1) > 1 and "gait_timing" not in manifest["features"]:
+        raise BundleError("several footsteps per tick need the 'gait_timing' state feature")
     num_legs = ROBOTS[manifest["robot"]].num_legs
     expected = feature_dim(manifest["features"], num_legs)
     state_dim = manifest["actor"]["config"].get("state_dim")

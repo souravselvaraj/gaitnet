@@ -1,8 +1,9 @@
 """The one action term: execute the planner's footstep and nudge through a low-level controller.
 
-The action vector is `gaitnet_core.action_layout`: the policy's choice (candidate index,
-duration), the concrete footstep it resolves to, and a velocity command nudge. The term
-reads only the footstep and nudge, so it never needs the candidate set.
+The action vector is `gaitnet_core.action_layout`: for each of the tick's rounds, the policy's
+choice (candidate index, duration) and the concrete footstep it resolves to, then a velocity
+command nudge. The term reads only the footsteps and nudge, so it never needs the candidate
+set. The number of rounds is the contract's `max_steps_per_tick`.
 
 The term owns the controller. Observation and reward terms reach the controller, the
 nudged command and the robot's state through it (`footstep_action(env)`). Its cfg is in
@@ -57,9 +58,10 @@ class FootstepControlAction(ActionTerm):
         self.controller: LowLevelController = cfg.controller.class_type(
             cfg.controller, num_robots=self.num_envs, dt=env.physics_dt, device=self.device
         )
-        self._raw_actions = torch.zeros(self.num_envs, action_layout.DIM, device=self.device)
+        self.rounds = contract.foothold_rules().max_steps_per_tick
+        self._raw_actions = torch.zeros(self.num_envs, action_layout.dim(self.rounds), device=self.device)
         self._nudge = torch.zeros(self.num_envs, 3, device=self.device)
-        self._footsteps = FootstepCommand.none(self.num_envs, device=self.device)
+        self._footsteps = [FootstepCommand.none(self.num_envs, device=self.device) for _ in range(self.rounds)]
         self._planner_observation: Observation | None = None
 
     def __del__(self):
@@ -70,7 +72,7 @@ class FootstepControlAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return action_layout.DIM
+        return action_layout.dim(self.rounds)
 
     @property
     def raw_actions(self) -> torch.Tensor:
@@ -81,9 +83,13 @@ class FootstepControlAction(ActionTerm):
         return self._raw_actions
 
     @property
-    def footsteps(self) -> FootstepCommand:
-        """The footsteps started on the latest env step."""
+    def footsteps(self) -> list[FootstepCommand]:
+        """The footsteps started on the latest env step, one command per round."""
         return self._footsteps
+
+    def steps_started(self) -> torch.Tensor:
+        """(N,) footsteps started on the latest env step."""
+        return torch.stack([footsteps.active for footsteps in self._footsteps], dim=0).sum(dim=0)
 
     @property
     def nudge(self) -> torch.Tensor:
@@ -125,17 +131,20 @@ class FootstepControlAction(ActionTerm):
         # (RSL-RL, evaluation) would refuse the in-place updates of a later reset outside it
         self._raw_actions[:] = actions
         action = EnvAction.decode(actions)
-        footsteps = action.footstep_command()
-        self._footsteps.active[:] = footsteps.active
-        self._footsteps.leg[:] = footsteps.leg
-        self._footsteps.target[:] = footsteps.target
-        duration = footsteps.duration
-        if self.cfg.clamp_duration:
-            duration = duration.clamp(*self.spec.swing_duration_range)
-        self._footsteps.duration[:] = torch.where(footsteps.active, duration, footsteps.duration)
+        for buffer, footsteps in zip(self._footsteps, action.footstep_commands()):
+            buffer.active[:] = footsteps.active
+            buffer.leg[:] = footsteps.leg
+            buffer.target[:] = footsteps.target
+            duration = footsteps.duration
+            if self.cfg.clamp_duration:
+                duration = duration.clamp(*self.spec.swing_duration_range)
+            buffer.duration[:] = torch.where(footsteps.active, duration, footsteps.duration)
         if self.cfg.apply_nudge:
             self._nudge[:] = action.nudge
-        self.controller.command_footsteps(self._footsteps)
+        # rounds step different legs (the policy only offers eligible ones), and both
+        # controllers keep each leg's swing apart, so they are started one after another
+        for buffer in self._footsteps:
+            self.controller.command_footsteps(buffer)
 
     def apply_actions(self):
         joint_pos, joint_vel = self.io.joint_state()
@@ -151,6 +160,7 @@ class FootstepControlAction(ActionTerm):
             ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         self._raw_actions[ids] = 0.0
         self._nudge[ids] = 0.0
-        self._footsteps.active[ids] = False
+        for footsteps in self._footsteps:
+            footsteps.active[ids] = False
         self.controller.reset(ids)
         self._planner_observation = None

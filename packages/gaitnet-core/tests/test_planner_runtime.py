@@ -31,7 +31,7 @@ def test_plan_and_env_action_round_trip():
     encoded = action.encode()
     assert encoded.shape == (4, DIM)
     decoded = EnvAction.decode(encoded)
-    assert torch.equal(decoded.choice_index, plan.selection.index)
+    assert torch.equal(decoded.choice_index[:, 0], plan.selection.index)
     command = decoded.footstep_command()
     assert torch.equal(command.active, plan.is_step)
     assert torch.allclose(command.target[command.active], plan.target[plan.is_step])
