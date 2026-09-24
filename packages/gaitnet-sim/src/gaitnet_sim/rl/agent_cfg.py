@@ -70,7 +70,7 @@ SMALL_CANDIDATE_SCORER = {
     "candidate_sizes": [32, 32],
     "trunk_sizes": [64, 64],
 }
-"""A quarter of the default scorer's parameters (~21k), for a distilled onboard student."""
+"""About a fifth of the default scorer's parameters (19k vs 103k), for a distilled onboard student."""
 FIXED_SWING_DURATION = 0.25
 """Swing duration (s) of the `swing_duration_ablation` preset, overridable as
 `agent.actor.network.fixed_duration=0.3`."""
