@@ -209,6 +209,15 @@ then the `nudge`. The env never needs the candidate set, and starts the rounds' 
 after another (both controllers keep each leg's swing apart). `step_taken` counts steps, so
 every step costs the same however many share a tick.
 
+**Distillation reuses the same wiring** ([distillation.py](packages/gaitnet-sim/src/gaitnet_sim/rl/distillation.py),
+preset `distill`, agent entry point `rsl_rl_distill_cfg_entry_point`). A trained actor is the
+teacher and reads the truth; a smaller student reads the camera map and noise. The env draws
+one candidate set per step (`FootstepControlAction.candidates`) and hands the teacher the
+same set judged on the true terrain (`teacher_candidates`: invalid where the truth rules the
+foothold out, true heights), so a flat action index means the same footstep to both and the
+loss is the exact KL of the two tick distributions, walked along the rounds taken. The student
+acts (DAgger), with a decaying share of robots executing the teacher.
+
 The swing duration is a Gaussian around the network's mean, with one learned std that has a
 floor (`agent.actor.duration_std_floor`, 0.01 s) because it gets no entropy bonus and otherwise
 shrinks to nothing. The env clamps the duration it executes to the robot's

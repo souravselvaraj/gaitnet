@@ -9,10 +9,12 @@ TASKS: dict[str, dict[str, str]] = {
     "GaitNet-Holes": {
         "env_cfg_entry_point": "gaitnet_sim.env.env_cfg:GaitNetHolesEnvCfg",
         "rsl_rl_cfg_entry_point": "gaitnet_sim.rl.agent_cfg:GaitNetPpoRunnerCfg",
+        "rsl_rl_distill_cfg_entry_point": "gaitnet_sim.rl.agent_cfg:GaitNetDistillationRunnerCfg",
     },
     "GaitNet-Pillars": {
         "env_cfg_entry_point": "gaitnet_sim.env.env_cfg:GaitNetPillarsEnvCfg",
         "rsl_rl_cfg_entry_point": "gaitnet_sim.rl.agent_cfg:GaitNetPillarsPpoRunnerCfg",
+        "rsl_rl_distill_cfg_entry_point": "gaitnet_sim.rl.agent_cfg:GaitNetPillarsDistillationRunnerCfg",
     },
 }
 

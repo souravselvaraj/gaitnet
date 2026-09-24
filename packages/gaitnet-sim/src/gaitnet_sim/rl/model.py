@@ -157,20 +157,8 @@ class GaitNetActor(nn.Module):
         reason, with gradients on only the first round is sampled: the update ignores what
         this returns and replays the stored rounds in `get_output_log_prob`.
         """
-        state = torch.cat([obs[group] for group in self.state_groups], dim=-1)
-        candidates = Candidates.unpack(obs[self.candidates_group])
-        terrain = obs[self.terrain_group] if self.terrain_group is not None else None
-        fixed = getattr(self.network, "fixed_duration", None) is not None
-        self.distribution = TickDistribution(
-            lambda s: self.network(s, candidates, terrain),
-            state,
-            candidates,
-            None if fixed else self.duration_std,
-            rounds=self.rounds,
-            min_stance_after_step=self.min_stance_after_step,
-            editor=self.editor,
-            duration_range=self.duration_range,
-        )
+        self.distribution = self.tick_distribution(obs)
+        candidates = self.distribution.candidates
         if stochastic_output and torch.is_grad_enabled() and self.rounds > 1:
             first = self.distribution.first.sample()
             noop = torch.full_like(first.index, candidates.noop_index)
@@ -188,6 +176,24 @@ class GaitNetActor(nn.Module):
             plan = plan_from_scores(first.scores, first.candidates, first.selection)
             nudge = combined_nudge(self.observers, plan, obs[self.base_command_group]).command_delta
         return encode_selection(selection, candidates, nudge)
+
+    def tick_distribution(self, obs: TensorDict) -> TickDistribution:
+        """The policy over this tick's footsteps for `obs`, scored but not yet walked (see
+        `gaitnet_core.rounds`). Doesn't touch the distribution `forward` keeps for PPO."""
+        state = torch.cat([obs[group] for group in self.state_groups], dim=-1)
+        candidates = Candidates.unpack(obs[self.candidates_group])
+        terrain = obs[self.terrain_group] if self.terrain_group is not None else None
+        fixed = getattr(self.network, "fixed_duration", None) is not None
+        return TickDistribution(
+            lambda s: self.network(s, candidates, terrain),
+            state,
+            candidates,
+            None if fixed else self.duration_std,
+            rounds=self.rounds,
+            min_stance_after_step=self.min_stance_after_step,
+            editor=self.editor,
+            duration_range=self.duration_range,
+        )
 
     def _require_distribution(self) -> TickDistribution:
         if self.distribution is None:

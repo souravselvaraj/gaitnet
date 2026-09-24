@@ -23,8 +23,11 @@ from isaaclab.managers import ActionTerm
 
 from gaitnet_core import action_layout
 from gaitnet_core.action_layout import EnvAction
+from gaitnet_core.candidates import Candidates
 from gaitnet_core.interfaces import FootstepCommand, LowLevelController
+from gaitnet_core.samplers import make_sampler
 from gaitnet_core.state import Observation, RobotState, TerrainPatch
+from gaitnet_core.terrain import inner_heights
 from gaitnet_sim.env.noise import corrupt
 from gaitnet_sim.env.perception import FrontCameraMap
 from gaitnet_sim.robot_io import RobotIO
@@ -64,6 +67,7 @@ class FootstepControlAction(ActionTerm):
         self._nudge = torch.zeros(self.num_envs, 3, device=self.device)
         self._footsteps = [FootstepCommand.none(self.num_envs, device=self.device) for _ in range(self.rounds)]
         self._planner_observation: Observation | None = None
+        self._candidates: dict[tuple, Candidates] = {}
         self.episode_progress = torch.zeros(self.num_envs, device=self.device)
         """(N,) distance walked this episode along the operator's command direction (m)."""
         self.episode_commanded = torch.zeros(self.num_envs, device=self.device)
@@ -136,6 +140,20 @@ class FootstepControlAction(ActionTerm):
             self._planner_observation = observation
         return self._planner_observation
 
+    def candidates(self, sampler: str, sampler_kwargs: dict | None = None) -> Candidates:
+        """This env step's candidate footholds from the named sampler, drawn from the planner's
+        view (`planner_observation`). Drawn once per env step and sampler, so every
+        observation group that reads them (the policy's candidates and, for distillation, the
+        teacher's view of the same set) sees the same draw."""
+        key = (sampler, tuple(sorted((sampler_kwargs or {}).items())))
+        if key not in self._candidates:
+            observation = self.planner_observation()
+            rules = self._env.cfg.gaitnet.foothold_rules()
+            valid = rules.valid(observation, self.spec)
+            heights = inner_heights(rules.heights(observation), self.grid)
+            self._candidates[key] = make_sampler(sampler, **(sampler_kwargs or {})).sample(valid, self.grid, heights=heights)
+        return self._candidates[key]
+
     def _track_progress(self) -> None:
         """Add one env step to the episode's walked and commanded distances: the base's
         velocity along the operator's (vx, vy) command, and the command's speed."""
@@ -160,6 +178,7 @@ class FootstepControlAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor):
         # the robots are about to move
         self._planner_observation = None
+        self._candidates.clear()
         self._track_progress()
         # copied into the buffers made at init: tensors made here under torch.inference_mode
         # (RSL-RL, evaluation) would refuse the in-place updates of a later reset outside it
@@ -202,3 +221,4 @@ class FootstepControlAction(ActionTerm):
         self.episode_progress[ids] = 0.0
         self.episode_commanded[ids] = 0.0
         self._planner_observation = None
+        self._candidates.clear()

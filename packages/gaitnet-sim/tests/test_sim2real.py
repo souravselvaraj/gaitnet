@@ -111,6 +111,7 @@ def test_action_term_clamps_executed_durations_but_not_the_stored_action():
     term._nudge = torch.zeros(4, 3)
     term._footsteps = [FootstepCommand.none(4, device="cpu")]
     term._planner_observation = None
+    term._candidates = {}
     term._track_progress = lambda: None
 
     actions = torch.zeros(4, action_layout.DIM)

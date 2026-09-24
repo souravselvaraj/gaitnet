@@ -63,3 +63,33 @@ def test_candidate_z_from_heights(grid):
         legs = torch.arange(4).view(1, 4, 1).expand_as(cell[..., 0])
         expected = heights[0][legs[0], cell[0, ..., 0], cell[0, ..., 1]]
         assert torch.allclose(cands.xyz[0, ..., 2], expected)
+
+
+def test_reassess_keeps_the_points_and_judges_them_on_other_terrain(grid):
+    from gaitnet_core.candidates import reassess
+
+    torch.manual_seed(0)
+    n = 3
+    perceived = torch.ones(n, 4, *grid.size, dtype=torch.bool)
+    perceived[:, :, :, :5] = False  # some cells never seen
+    cands = UniformJitter(32).sample(perceived, grid, heights=torch.full((n, 4, *grid.size), -0.1))
+    truth = torch.ones_like(perceived)
+    truth[:, :, :, 10:] = False  # the truth rules out more: a hole
+    heights = torch.linspace(-0.3, -0.2, grid.size[1]).expand(n, 4, *grid.size).clone()
+    heights[truth.logical_not()] = float("-inf")  # no ray back from the hole
+
+    judged = reassess(cands, truth, grid, heights)
+    cell, _ = grid.xy_to_cell(cands.xyz[..., :2])
+    in_hole = cell[..., 1] >= 10
+    # same slots, same points: an index means the same foothold in both sets
+    assert judged.xyz.shape == cands.xyz.shape and torch.equal(judged.log_q, cands.log_q)
+    assert torch.equal(judged.valid, cands.valid & ~in_hole)
+    kept = judged.valid
+    assert kept.any() and (cands.valid & in_hole).any()
+    assert torch.equal(judged.xyz[..., :2][kept], cands.xyz[..., :2][kept])
+    # z is the true cell's height; dropped slots are zeroed, never -inf
+    expected_z = torch.linspace(-0.3, -0.2, grid.size[1])[cell[..., 1]]
+    assert torch.allclose(judged.xyz[..., 2][kept], expected_z[kept])
+    assert torch.isfinite(judged.xyz).all() and (judged.xyz[~kept] == 0).all()
+    # a view that allows everything keeps the valid slots
+    assert torch.equal(reassess(cands, torch.ones_like(truth), grid).valid, cands.valid)

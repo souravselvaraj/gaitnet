@@ -33,6 +33,7 @@ compose.
 | `slowdown` | + group `base_command` | the actor runs the `step_confidence_slowdown` observer while acting | ~0 |
 | `swing_duration_ablation` | — | `CandidateScorer` with `fixed_duration=0.25` s: no duration head, the policy is the footstep choice alone | ~0 |
 | `gpu_mpc` | the low-level controller runs batched on the GPU instead of in a CPU process pool | — | ~0 |
+| `distill` | + groups `teacher_state`, `teacher_candidates` (the true state, and the student's candidates judged on the true terrain) | for `--agent rsl_rl_distill_cfg_entry_point` only, see [Distillation](#distillation) | — |
 
 \* Forward and backward of the actor on one PPO minibatch (64000 rows, 4 legs x 64
 candidates) on an RTX 5070 Ti; PPO runs 32 per iteration. Without `gpu_mpc`, rollouts are
@@ -51,6 +52,35 @@ docker compose -f docker/compose.yaml run --rm sim -m gaitnet_sim.scripts.train 
 
 The `terrain` group costs ~4 GB of rollout storage at 1024 envs x 250 steps, which is why
 it is off unless a preset reads it.
+
+### Distillation
+
+A trained PPO actor (the teacher, which sees the true state and terrain) can be distilled
+into a smaller student that sees what the robot will: the front camera's map and the
+observation noise. The student acts and is trained on the states it reaches (DAgger; a
+fraction of robots, falling to zero over the first iterations, execute the teacher's
+footsteps instead). Both score the student's own candidate set, which the teacher sees
+judged on the true terrain, so the loss is the exact KL divergence between the two tick
+distributions (footstep choice and swing duration, over every round taken).
+See `gaitnet_sim.rl.distillation`.
+
+```bash
+python -m gaitnet_sim.scripts.train --task GaitNet-Holes --num_envs 1024 \
+    --agent rsl_rl_distill_cfg_entry_point presets=distill,gpu_mpc \
+    agent.algorithm.teacher_checkpoint=logs/rsl_rl/gaitnet_holes/<teacher run>/model_5000.pt \
+    env.gaitnet.max_steps_per_tick=2
+```
+
+The teacher's network, duration floor and state features come from its run's
+`params/agent.yaml`; the algorithm refuses a teacher trained with another number of
+footsteps per tick or other state features. Keep the env inside what the teacher was trained
+on (its command ranges, terrain), since its footsteps are the targets. The student is
+`SMALL_CANDIDATE_SCORER` (~21k parameters) by default, `agent.student.network.*` to change it.
+`--checkpoint` resumes a distillation run (student, teacher, optimizer, DAgger schedule), and
+`export_bundle` exports its student. Logged: `Loss/kl` (and its categorical and duration
+parts), `Loss/agreement_gate` / `Loss/agreement_footstep` (the student's most likely first
+footstep is the teacher's: same leg or hold / same foothold), and the teacher's share of the
+executed footsteps.
 
 ### Low-level controller
 

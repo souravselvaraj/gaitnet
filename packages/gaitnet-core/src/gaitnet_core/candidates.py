@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import torch
 
+from gaitnet_core.grid import FootholdGrid
+
 
 @dataclass
 class Candidates:
@@ -81,3 +83,31 @@ class Candidates:
     def __getitem__(self, index) -> "Candidates":
         """Select a subset of robots."""
         return Candidates(self.xyz[index], self.valid[index], self.log_q[index])
+
+
+def reassess(
+    candidates: Candidates, valid: torch.Tensor, grid: FootholdGrid, heights: torch.Tensor | None = None
+) -> Candidates:
+    """The same candidate points judged on another view of the terrain, e.g. the true terrain
+    where `candidates` were drawn from a perceived one.
+
+    A slot stays valid only if it was valid and the cell holding its point is valid in `valid`;
+    its z is re-read from that cell of `heights`, as the samplers set it. Slots that turn
+    invalid are zeroed like unfilled ones (their cell may have no height at all). Indices,
+    x, y and `log_q` are kept, so a flat action index means the same foothold in both sets.
+
+    Args:
+        valid: (N, L, *grid.size) bool valid footholds on the other view
+        heights: (N, L, *grid.size) its cell heights relative to the hip; None gives z = 0
+    """
+    n, legs = candidates.xyz.shape[:2]
+    cells, in_bounds = grid.xy_to_cell(candidates.xyz[..., :2])
+    flat = cells[..., 0] * grid.size[1] + cells[..., 1]  # (N, L, K)
+    still_valid = candidates.valid & in_bounds & torch.gather(valid.reshape(n, legs, -1), 2, flat)
+    if heights is None:
+        z = torch.zeros_like(candidates.xyz[..., 2])
+    else:
+        z = torch.gather(heights.reshape(n, legs, -1).to(candidates.xyz.dtype), 2, flat)
+    xyz = torch.cat([candidates.xyz[..., :2], z.unsqueeze(-1)], dim=-1)
+    xyz = torch.where(still_valid.unsqueeze(-1), xyz, torch.zeros_like(xyz))
+    return Candidates(xyz=xyz, valid=still_valid, log_q=candidates.log_q)

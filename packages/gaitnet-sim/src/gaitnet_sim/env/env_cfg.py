@@ -66,6 +66,19 @@ class ObservationsCfg:
     class BaseCommandCfg(ObsGroup):
         base_command = ObsTerm(func=observations.base_command)
 
+    @configclass
+    class TeacherStateCfg(ObsGroup):
+        """A distillation teacher's state: the true robot state. Its features must be the ones
+        the teacher was trained on (the distillation algorithm checks)."""
+
+        robot_state = ObsTerm(func=observations.teacher_robot_state, params={"features": list(DEFAULT_FEATURES)})
+
+    @configclass
+    class TeacherCandidatesCfg(ObsGroup):
+        """The student's candidates as the teacher sees them: judged on the true terrain."""
+
+        candidates = ObsTerm(func=observations.teacher_candidates)
+
     state: StateCfg = StateCfg()
     candidates: CandidatesCfg = CandidatesCfg()
 
@@ -77,6 +90,10 @@ class ObservationsCfg:
     """For the privileged critic."""
     base_command = preset(default=None, slowdown=BaseCommandCfg())
     """For feedback observers running in the actor during training."""
+    teacher_state = preset(default=None, distill=TeacherStateCfg())
+    teacher_candidates = preset(default=None, distill=TeacherCandidatesCfg())
+    """For a distillation teacher (`gaitnet_sim.rl.distillation`): the truth, without the camera
+    map or observation noise the student's groups carry."""
 
 
 @configclass

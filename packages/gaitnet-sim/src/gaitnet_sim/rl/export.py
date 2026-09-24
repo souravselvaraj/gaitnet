@@ -4,7 +4,8 @@ A run directory, as Isaac Lab's train entry point writes it, has `params/env.yam
 `params/agent.yaml` and RSL-RL checkpoints `model_<iteration>.pt`. The bundle takes the
 scoring network and its learned duration noise from a checkpoint, the feedback observers
 from the agent cfg, and the robot, foothold grid and rules, state features and training
-sampler from the env cfg. MLflow runs hold the same files as artifacts (see
+sampler from the env cfg. The policy is the PPO run's actor, or a distillation run's student
+(`gaitnet_sim.rl.distillation`). MLflow runs hold the same files as artifacts (see
 `MlflowLogWriter`) and are downloaded into that layout first.
 """
 
@@ -81,16 +82,22 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
     contract = GaitNetCfg(**env["gaitnet"])
     spec = contract.robot_spec()
     features = tuple(env["observations"]["state"]["robot_state"]["params"]["features"])
+    # a distillation run deploys its student
+    policy = "student" if "student" in agent and "actor" not in agent else "actor"
+    policy_cfg = agent[policy]
     # the planner builds the network's state from the features alone
-    actor_groups = list(agent["obs_groups"]["actor"])
+    actor_groups = list(agent["obs_groups"][policy])
     if actor_groups != ["state"]:
-        raise BundleError(f"the actor read observation groups {actor_groups}; a bundle's planner provides only 'state'")
+        raise BundleError(f"the {policy} read observation groups {actor_groups}; a bundle's planner provides only 'state'")
+    candidates_group = policy_cfg.get("candidates_group", "candidates")
+    if candidates_group != "candidates":
+        raise BundleError(f"the {policy} scored the '{candidates_group}' group; a bundle's planner samples like 'candidates'")
     candidates = env["observations"]["candidates"]["candidates"]["params"]
     train_sampler = {"name": candidates["sampler"], **(candidates.get("sampler_kwargs") or {})}
 
     rules = contract.foothold_rules()
     if rules.max_steps_per_tick > 1:
-        actor_cfg = agent["actor"]
+        actor_cfg = policy_cfg
         if list(actor_cfg.get("state_features", features)) != list(features):
             raise BundleError(f"the actor edited state features {actor_cfg['state_features']}, the env built {list(features)}")
         if actor_cfg.get("min_stance_after_step", 2) != rules.min_stance_after_step:
@@ -99,7 +106,7 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
                 f" env's rules {rules.min_stance_after_step}; set agent.actor.min_stance_after_step to match"
             )
     grid = contract.foothold_grid()
-    network_cfg = dict(agent["actor"]["network"])
+    network_cfg = dict(policy_cfg["network"])
     network_class = network_cfg.pop("class_name")
     network_cfg.setdefault("state_dim", feature_dim(features, spec.num_legs))
     if network_cfg.get("grid") is not None and FootholdGrid.from_dict(network_cfg["grid"]) != grid:
@@ -107,10 +114,10 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
     network = build_network(network_class, network_cfg)
 
     saved = torch.load(run_dir / checkpoint, map_location="cpu", weights_only=False)
-    actor_state = saved["actor_state_dict"]
+    actor_state = saved[f"{policy}_state_dict"]
     network.load_state_dict({key.removeprefix("network."): value for key, value in actor_state.items() if key.startswith("network.")})
     # the same std the actor sampled with; runs from before the floor existed have none
-    floor = float(agent["actor"].get("duration_std_floor", 0.0))
+    floor = float(policy_cfg.get("duration_std_floor", 0.0))
     duration_std = float(actor_state["duration_log_std"].exp()) + floor
 
     run_id_file = run_dir / RUN_ID_FILE
@@ -130,10 +137,11 @@ def bundle_from_run(run_dir: str | Path, checkpoint: str | None = None, extra: d
             "checkpoint": checkpoint,
             "iteration": saved.get("iter"),
             "controller": str(controller),
+            "policy": policy,
             **linked,
             **(extra or {}),
         },
-        observers={name: dict(kwargs or {}) for name, kwargs in (agent["actor"].get("observers") or {}).items()},
+        observers={name: dict(kwargs or {}) for name, kwargs in (policy_cfg.get("observers") or {}).items()},
     )
 
 

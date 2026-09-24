@@ -4,12 +4,15 @@ runtime compute the same quantities.
 Groups (see `env_cfg.ObservationsCfg`): `state` (the robot state vector, features chosen by
 name), `candidates` (the footholds the policy scores this tick), and, when a preset turns
 them on, `terrain` (per-leg height patches, for networks that read them), `privileged`
-(sim-only inputs for the critic) and `base_command` (the command before any nudge, for
-feedback observers). Candidates are an observation so the RL library stores them with the
+(sim-only inputs for the critic), `base_command` (the command before any nudge, for
+feedback observers) and `teacher_state` / `teacher_candidates` (a distillation teacher's
+view, see below). Candidates are an observation so the RL library stores them with the
 step and can recompute log-probabilities on exactly the set the action was drawn from.
 
 The policy's groups read the action term's `planner_observation()`, which carries the
-observation noise; privileged terms read the truth.
+observation noise and the camera map; privileged terms read the truth. A distillation
+teacher reads the truth too, but scores the student's own candidates, re-judged on the true
+terrain (`teacher_candidates`), so the two policies are distributions over the same set.
 """
 
 from __future__ import annotations
@@ -21,8 +24,8 @@ import torch.nn.functional as F
 
 from isaaclab.managers import SceneEntityCfg
 
+from gaitnet_core.candidates import reassess
 from gaitnet_core.features import state_vector
-from gaitnet_core.samplers import make_sampler
 from gaitnet_core.terrain import fill_unknown, inner_heights, valid_footholds
 
 if TYPE_CHECKING:
@@ -62,18 +65,42 @@ def footstep_candidates(
     Only valid footholds (terrain rules and leg eligibility, `env.cfg.gaitnet`) are
     sampled, so the policy never scores a foothold it isn't allowed to take.
     """
-    term = footstep_action(env, action_name)
-    observation = term.planner_observation()
-    rules = env.cfg.gaitnet.foothold_rules()
-    valid = rules.valid(observation, term.spec)
-    heights = inner_heights(rules.heights(observation), term.grid)
-    candidates = make_sampler(sampler, **(sampler_kwargs or {})).sample(valid, term.grid, heights=heights)
-    return candidates.pack()
+    return footstep_action(env, action_name).candidates(sampler, sampler_kwargs).pack()
 
 
 def base_command(env: "ManagerBasedRLEnv", action_name: str = "footstep") -> torch.Tensor:
     """(N, 3) the velocity command before any nudge, which feedback observers scale."""
     return footstep_action(env, action_name).base_command()
+
+
+##
+# Distillation: the teacher's view of the same tick
+##
+
+
+def teacher_robot_state(env: "ManagerBasedRLEnv", features: list[str], action_name: str = "footstep") -> torch.Tensor:
+    """(N, D) the named features of the true robot state, without observation noise."""
+    return state_vector(footstep_action(env, action_name).observation().state, features)
+
+
+def teacher_candidates(
+    env: "ManagerBasedRLEnv",
+    candidates_group: str = "candidates",
+    candidates_term: str = "candidates",
+    action_name: str = "footstep",
+) -> torch.Tensor:
+    """(N, L, K, 5) the student's candidates (the `candidates_group` group's term, same
+    draw) judged on the true terrain and state: a slot the truth rules out is invalid, and z is
+    the true height (`gaitnet_core.candidates.reassess`). Flat indices mean the same foothold in
+    both groups, so the teacher's distribution is over the student's own choices."""
+    term = footstep_action(env, action_name)
+    params = getattr(getattr(env.cfg.observations, candidates_group), candidates_term).params
+    candidates = term.candidates(params.get("sampler", "uniform_jitter"), params.get("sampler_kwargs"))
+    truth = term.observation()
+    rules = env.cfg.gaitnet.foothold_rules()
+    valid = rules.valid(truth, term.spec)
+    heights = inner_heights(rules.heights(truth), term.grid)
+    return reassess(candidates, valid, term.grid, heights).pack()
 
 
 ##

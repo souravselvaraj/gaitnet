@@ -10,13 +10,22 @@ Presets (`presets=<name>[,<name>...]`), each matched by the env cfg's observatio
 - crop: the candidate scorer with the local-crop encoder, reading the terrain group
 - privileged: the critic also reads the privileged group
 - slowdown: the actor runs the step-confidence slowdown observer, reading base_command
+
+`GaitNetDistillationRunnerCfg` (agent entry point `rsl_rl_distill_cfg_entry_point`, env preset
+`distill`) distills a trained actor into a smaller student that sees the camera map, see
+`gaitnet_sim.rl.distillation`.
 """
 
 from __future__ import annotations
 
 from isaaclab.utils import configclass
 
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import (
+    RslRlDistillationRunnerCfg,
+    RslRlMLPModelCfg,
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoAlgorithmCfg,
+)
 from isaaclab_tasks.utils import preset
 
 from gaitnet_core.features import DEFAULT_FEATURES
@@ -55,6 +64,13 @@ CANDIDATE_SCORER = {
     "candidate_sizes": [64, 64],
     "trunk_sizes": [128, 128, 128],
 }
+SMALL_CANDIDATE_SCORER = {
+    **CANDIDATE_SCORER,
+    "shared_sizes": [64, 64],
+    "candidate_sizes": [32, 32],
+    "trunk_sizes": [64, 64],
+}
+"""A quarter of the default scorer's parameters (~21k), for a distilled onboard student."""
 FIXED_SWING_DURATION = 0.25
 """Swing duration (s) of the `swing_duration_ablation` preset, overridable as
 `agent.actor.network.fixed_duration=0.3`."""
@@ -123,4 +139,47 @@ class GaitNetPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class GaitNetPillarsPpoRunnerCfg(GaitNetPpoRunnerCfg):
+    experiment_name = "gaitnet_pillars"
+
+
+@configclass
+class CandidateDistillationAlgorithmCfg:
+    """Keyword arguments of `gaitnet_sim.rl.distillation.CandidateDistillation`, see there."""
+
+    class_name: str = "gaitnet_sim.rl.distillation:CandidateDistillation"
+    teacher_checkpoint: str = ""
+    """The teacher's PPO checkpoint, `<run dir>/model_<i>.pt`; its run's `params/` give the
+    teacher's network. Required, e.g. `agent.algorithm.teacher_checkpoint=/path/model_5000.pt`."""
+    num_learning_epochs: int = 4
+    num_mini_batches: int = 4
+    learning_rate: float = 1e-3
+    max_grad_norm: float = 1.0
+    duration_coef: float = 1.0
+    student_stochastic: bool = True
+    teacher_action_prob: float = 0.5
+    teacher_action_iterations: int = 200
+    optimizer: str = "adam"
+
+
+@configclass
+class GaitNetDistillationRunnerCfg(RslRlDistillationRunnerCfg):
+    """Distill a trained GaitNet actor (the teacher, on the truth) into a small student that
+    sees the camera map and observation noise. Run with `--agent rsl_rl_distill_cfg_entry_point
+    presets=distill` (the env's teacher groups) and the teacher's contract, e.g.
+    `env.gaitnet.max_steps_per_tick=2`."""
+
+    num_steps_per_env = 32
+    max_iterations = 3000
+    save_interval = 50
+    experiment_name = "gaitnet_holes"
+    obs_groups = {"student": ["state"], "teacher": ["teacher_state"]}
+    student = GaitNetActorCfg(network=SMALL_CANDIDATE_SCORER)
+    teacher = GaitNetActorCfg(candidates_group="teacher_candidates")
+    """The teacher's network, duration floor and state features are replaced by its run's."""
+    algorithm = CandidateDistillationAlgorithmCfg()
+    logger = WriterCfg(class_name="gaitnet_sim.rl.mlflow_writer.MlflowLogWriter", experiment_name="gaitnet")
+
+
+@configclass
+class GaitNetPillarsDistillationRunnerCfg(GaitNetDistillationRunnerCfg):
     experiment_name = "gaitnet_pillars"
