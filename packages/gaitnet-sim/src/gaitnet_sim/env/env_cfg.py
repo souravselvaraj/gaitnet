@@ -84,7 +84,10 @@ class ActionsCfg:
     footstep = FootstepControlActionCfg()
 
 
-_MAX_XY_VELOCITY = 0.2
+# fast enough that one leg at a time (a crawl, ~0.25 m/s at 0.2 s swings) can't keep up, so
+# stepping two legs per tick (env.gaitnet.max_steps_per_tick=2) pays; the controller follows
+# 0.5 m/s commands
+_MAX_XY_VELOCITY = 0.4
 _MAX_LATERAL_VELOCITY = 0.05
 _MAX_YAW_RATE = 0.4
 
