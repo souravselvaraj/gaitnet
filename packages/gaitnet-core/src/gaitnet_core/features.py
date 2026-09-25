@@ -13,6 +13,7 @@ from typing import Callable
 
 import torch
 
+from gaitnet_core import lookahead
 from gaitnet_core.state import RobotState
 
 MAX_STANCE_TIME_OBS = 0.5
@@ -41,6 +42,15 @@ def _gait_timing(state: RobotState) -> torch.Tensor:
     return _flat(timing.transpose(1, 2))
 
 
+def _terrain_ahead(state: RobotState) -> torch.Tensor:
+    if state.terrain_ahead is None:
+        raise ValueError(
+            "the 'terrain_ahead' feature needs RobotState.terrain_ahead: in the simulator the lookahead"
+            " scanner (presets=lookahead), on a robot the elevation map sampled at gaitnet_core.lookahead's points"
+        )
+    return state.terrain_ahead
+
+
 FEATURES: dict[str, Feature] = {
     # leg grouped (FL xyz, FR xyz, ...) unless noted
     "foot_pos": Feature(lambda s: _flat(s.foot_pos), dim_per_leg=3),
@@ -53,6 +63,8 @@ FEATURES: dict[str, Feature] = {
     "contact": Feature(lambda s: s.contact.float(), dim_per_leg=1),
     "gait_timing": Feature(_gait_timing, dim_per_leg=3),
     "command": Feature(lambda s: s.command, dim_fixed=3),
+    # the terrain ahead of the base, coarsely: not in DEFAULT_FEATURES, see gaitnet_core.lookahead
+    "terrain_ahead": Feature(lambda s: _terrain_ahead(s), dim_fixed=lookahead.FEATURE_DIM),
 }
 
 DEFAULT_FEATURES: tuple[str, ...] = (
@@ -65,6 +77,10 @@ DEFAULT_FEATURES: tuple[str, ...] = (
     "foot_vel",
     "gait_timing",
 )
+
+
+LOOKAHEAD_FEATURES: tuple[str, ...] = (*DEFAULT_FEATURES, "terrain_ahead")
+"""The defaults, then the terrain ahead (`gaitnet_core.lookahead`)."""
 
 
 def feature_dim(names: tuple[str, ...] | list[str], num_legs: int) -> int:

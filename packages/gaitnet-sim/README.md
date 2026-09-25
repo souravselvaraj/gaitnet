@@ -33,6 +33,7 @@ compose.
 | `slowdown` | + group `base_command` | the actor runs the `step_confidence_slowdown` observer while acting | ~0 |
 | `swing_duration_ablation` | — | `CandidateScorer` with `fixed_duration=0.25` s: no duration head, the policy is the footstep choice alone | ~0 |
 | `gpu_mpc` | the low-level controller runs batched on the GPU instead of in a CPU process pool | — | ~0 |
+| `lookahead` | + scanner `ahead_scanner` and the state feature `terrain_ahead`: the strip 0.2 m behind to 1.4 m ahead of the base, 1.2 m wide, as 8 x 6 cells of 0.2 m, each with mean height, hole fraction and known fraction (144 numbers, through the camera map when it is on); see `gaitnet_core.lookahead` | the actor's `state_features` match | ~0 |
 | `distill` | + groups `teacher_state`, `teacher_candidates` (the true state, and the student's candidates judged on the true terrain) | for `--agent rsl_rl_distill_cfg_entry_point` only, see [Distillation](#distillation) | — |
 
 \* Forward and backward of the actor on one PPO minibatch (64000 rows, 4 legs x 64

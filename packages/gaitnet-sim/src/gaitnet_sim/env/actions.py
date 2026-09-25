@@ -14,6 +14,7 @@ without the simulator.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -21,7 +22,7 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import ActionTerm
 
-from gaitnet_core import action_layout
+from gaitnet_core import action_layout, lookahead
 from gaitnet_core.action_layout import EnvAction
 from gaitnet_core.candidates import Candidates
 from gaitnet_core.interfaces import FootstepCommand, LowLevelController
@@ -58,6 +59,7 @@ class FootstepControlAction(ActionTerm):
             contact_sensor_name=cfg.contact_sensor_name,
             scanner_names=cfg.scanner_names,
             contact_threshold=cfg.contact_threshold,
+            ahead_scanner_name=cfg.ahead_scanner_name,
         )
         self.controller: LowLevelController = cfg.controller.class_type(
             cfg.controller, num_robots=self.num_envs, dt=env.physics_dt, device=self.device
@@ -173,7 +175,15 @@ class FootstepControlAction(ActionTerm):
         known, error = self.camera_map.lookup(self.io.terrain_points_xy())
         heights = observation.terrain.heights
         heights = torch.where(known, heights + error, torch.full_like(heights, float("-inf")))
-        return Observation(observation.state, TerrainPatch(heights=heights, grid=observation.terrain.grid))
+        state = observation.state
+        if state.terrain_ahead is not None:
+            # the strip ahead as the camera's map knows it, too
+            xy, z = self.io.ahead_samples()
+            known_ahead, error_ahead = self.camera_map.lookup(xy.reshape(xy.shape[0], -1, 2))
+            known_ahead = known_ahead.reshape(z.shape)
+            z = z + error_ahead.reshape(z.shape)
+            state = replace(state, terrain_ahead=lookahead.terrain_ahead(z, known_ahead, self.io.ground_height()))
+        return Observation(state, TerrainPatch(heights=heights, grid=observation.terrain.grid))
 
     def process_actions(self, actions: torch.Tensor):
         # the robots are about to move

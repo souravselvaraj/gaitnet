@@ -129,3 +129,13 @@ def test_distillation_presets():
     assert agent.student.network["candidate_features"] == "xyz_crop"
     assert agent.student.network["shared_sizes"] == [64, 64]
     assert FootholdGrid.from_dict(agent.student.network["grid"]) == env.gaitnet.foothold_grid()
+
+
+def test_lookahead_preset_adds_the_scanner_and_the_feature():
+    env, agent = resolve()
+    assert env.scene.ahead_scanner is None
+    assert "terrain_ahead" not in env.observations.state.robot_state.params["features"]
+    env, agent = resolve("presets=lookahead")
+    assert env.scene.ahead_scanner is not None
+    features = env.observations.state.robot_state.params["features"]
+    assert features[-1] == "terrain_ahead" and list(agent.actor.state_features) == list(features)

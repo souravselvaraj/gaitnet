@@ -11,7 +11,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from gaitnet_core.bundle import BundleError, PolicyBundle
 from gaitnet_sim.env.commands import FixedVelocityCommandCfg
 from gaitnet_sim.env.env_cfg import GaitNetEnvCfg
-from gaitnet_sim.env.scene import SCANNER_NAMES, foothold_scanner_cfg
+from gaitnet_sim.env.scene import SCANNER_NAMES, ahead_scanner_cfg, foothold_scanner_cfg
 from gaitnet_sim.env.terminations import out_of_sub_terrain
 from gaitnet_sim.robot import HIP_NAMES
 from gaitnet_sim.terrains import make_eval_terrain
@@ -54,6 +54,12 @@ def apply_bundle_contract(env_cfg: GaitNetEnvCfg, bundle: PolicyBundle) -> None:
         scanner = foothold_scanner_cfg(hip, grid)
         scanner.update_period = update_period
         setattr(env_cfg.scene, name, scanner)
+    # a policy that reads the terrain ahead needs the scanner that samples it
+    ahead = None
+    if "terrain_ahead" in bundle.features:
+        ahead = ahead_scanner_cfg()
+        ahead.update_period = update_period
+    env_cfg.scene.ahead_scanner = ahead
 
 
 def make_eval_env_cfg(

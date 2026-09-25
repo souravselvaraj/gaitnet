@@ -26,7 +26,7 @@ from isaaclab.utils import configclass
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab_tasks.utils import preset
 
-from gaitnet_core.features import DEFAULT_FEATURES
+from gaitnet_core.features import DEFAULT_FEATURES, LOOKAHEAD_FEATURES
 from gaitnet_sim.env import curriculum, observations, rewards, terminations
 from gaitnet_sim.env.actions_cfg import FootstepControlActionCfg
 from gaitnet_sim.env.contract import GaitNetCfg
@@ -39,7 +39,11 @@ from gaitnet_sim.terrains import pillars_terrain_cfg
 class ObservationsCfg:
     @configclass
     class StateCfg(ObsGroup):
-        robot_state = ObsTerm(func=observations.robot_state, params={"features": list(DEFAULT_FEATURES)})
+        robot_state = preset(
+            default=ObsTerm(func=observations.robot_state, params={"features": list(DEFAULT_FEATURES)}),
+            lookahead=ObsTerm(func=observations.robot_state, params={"features": list(LOOKAHEAD_FEATURES)}),
+        )
+        """`presets=lookahead` adds the terrain ahead (`gaitnet_core.lookahead`) to the state."""
 
     @configclass
     class TerrainCfg(ObsGroup):

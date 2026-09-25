@@ -10,7 +10,7 @@ from gaitnet_sim import robot as go1
 from gaitnet_sim.controllers import BatchedMpcControllerCfg, PooledMpcControllerCfg
 from gaitnet_sim.env.noise import ObservationNoiseCfg
 from gaitnet_sim.env.perception import FrontCameraCfg
-from gaitnet_sim.env.scene import SCANNER_NAMES
+from gaitnet_sim.env.scene import AHEAD_SCANNER_NAME, SCANNER_NAMES
 
 
 @configclass
@@ -47,5 +47,7 @@ class FootstepControlActionCfg(ActionTermCfg):
     contact_sensor_name: str = "contact_forces"
     scanner_names: tuple[str, ...] = SCANNER_NAMES
     """One foothold scanner per leg, in leg order."""
+    ahead_scanner_name: str = AHEAD_SCANNER_NAME
+    """The lookahead scanner; states carry `terrain_ahead` when the scene has it (presets=lookahead)."""
     contact_threshold: float = 1.0
     """Normal force above which a foot counts as in contact (N)."""

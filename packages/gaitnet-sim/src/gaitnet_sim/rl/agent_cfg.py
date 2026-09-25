@@ -28,7 +28,7 @@ from isaaclab_rl.rsl_rl import (
 )
 from isaaclab_tasks.utils import preset
 
-from gaitnet_core.features import DEFAULT_FEATURES
+from gaitnet_core.features import DEFAULT_FEATURES, LOOKAHEAD_FEATURES
 from gaitnet_sim.env.contract import GaitNetCfg
 
 
@@ -127,7 +127,7 @@ class GaitNetActorCfg:
     duration_std_floor: float = 0.01
     # the actor can't read the env's contract, so these repeat it for the later rounds of a
     # tick (env.gaitnet.max_steps_per_tick > 1); export checks that they still agree
-    state_features: list[str] = list(DEFAULT_FEATURES)
+    state_features = preset(default=list(DEFAULT_FEATURES), lookahead=list(LOOKAHEAD_FEATURES))
     min_stance_after_step: int = 2
     # Isaac Lab's cfg handling reads these on every model cfg; the actor's distribution is fixed
     distribution_cfg: None = None

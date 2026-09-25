@@ -9,7 +9,9 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
+from isaaclab_tasks.utils import preset
 
+from gaitnet_core import lookahead
 from gaitnet_core.grid import FootholdGrid
 from gaitnet_core.robot_spec import LEG_NAMES
 from gaitnet_sim.env.contract import GaitNetCfg
@@ -35,6 +37,28 @@ def foothold_scanner_cfg(hip_name: str, grid: FootholdGrid) -> RayCasterCfg:
             resolution=grid.resolution,
             size=((grid.patch_size[0] - 1) * grid.resolution, (grid.patch_size[1] - 1) * grid.resolution),
             # x outer, y inner: rays reshape to (size_x, size_y), the core grid's layout
+            ordering="yx",
+        ),
+        mesh_prim_paths=["/World/ground"],
+        debug_vis=False,
+    )
+
+
+AHEAD_SCANNER_NAME = "ahead_scanner"
+
+
+def ahead_scanner_cfg() -> RayCasterCfg:
+    """A downward grid of rays over the strip ahead of the base (`gaitnet_core.lookahead`):
+    attached to the base, yaw aligned, centred `lookahead.AHEAD_CENTRE` ahead of it."""
+    resolution = lookahead.FINE_RESOLUTION
+    return RayCasterCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{BASE_NAME}",
+        offset=RayCasterCfg.OffsetCfg(pos=(lookahead.AHEAD_CENTRE[0], lookahead.AHEAD_CENTRE[1], 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(
+            resolution=resolution,
+            size=((lookahead.FINE_SHAPE[0] - 1) * resolution, (lookahead.FINE_SHAPE[1] - 1) * resolution),
+            # x outer, y inner: rays reshape to FINE_SHAPE
             ordering="yx",
         ),
         mesh_prim_paths=["/World/ground"],
@@ -68,6 +92,9 @@ class GaitNetSceneCfg(InteractiveSceneCfg):
         mesh_prim_paths=["/World/ground"],
         debug_vis=False,
     )
+
+    ahead_scanner = preset(default=None, lookahead=ahead_scanner_cfg())
+    """The terrain ahead, for the `terrain_ahead` state feature; off unless `presets=lookahead`."""
 
     light: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/Light",

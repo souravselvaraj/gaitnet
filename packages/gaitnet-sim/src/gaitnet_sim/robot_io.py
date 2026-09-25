@@ -16,6 +16,7 @@ from isaaclab.assets import Articulation
 from isaaclab.scene import InteractiveScene
 from isaaclab.sensors import ContactSensor, RayCaster
 
+from gaitnet_core import lookahead
 from gaitnet_core.grid import FootholdGrid
 from gaitnet_core.robot_spec import RobotSpec
 from gaitnet_core.state import RobotState, TerrainPatch
@@ -33,6 +34,7 @@ class RobotIO:
         contact_sensor_name: str,
         scanner_names: Sequence[str],
         contact_threshold: float,
+        ahead_scanner_name: str | None = None,
     ):
         """
         Args:
@@ -41,6 +43,8 @@ class RobotIO:
             scanner_names: one hip-mounted, yaw-aligned grid ray caster per leg, in leg order,
                 whose pattern covers `grid.patch_size`
             contact_threshold: normal force above which a foot is in contact (N)
+            ahead_scanner_name: the lookahead ray caster (`gaitnet_sim.env.scene.ahead_scanner_cfg`),
+                if the scene has one: then states carry `terrain_ahead`
         """
         self.spec = spec
         self.grid = grid
@@ -48,6 +52,12 @@ class RobotIO:
         self.contact_sensor: ContactSensor = scene[contact_sensor_name]
         self.scanners: list[RayCaster] = [scene[name] for name in scanner_names]
         self.contact_threshold = contact_threshold
+        self.ahead_scanner: RayCaster | None = None
+        if ahead_scanner_name is not None and ahead_scanner_name in scene.sensors:
+            self.ahead_scanner = scene.sensors[ahead_scanner_name]
+            points = lookahead.FINE_SHAPE[0] * lookahead.FINE_SHAPE[1]
+            if self.ahead_scanner.num_rays != points:
+                raise ValueError(f"the lookahead scanner casts {self.ahead_scanner.num_rays} rays, needs {points}")
 
         self.joint_ids, _ = self.robot.find_joints(list(joint_names), preserve_order=True)
         self.foot_ids, _ = self.robot.find_bodies(list(foot_names), preserve_order=True)
@@ -115,7 +125,27 @@ class RobotIO:
             gait_timing=gait_timing,
             command=command,
             base_command=base_command,
+            terrain_ahead=self.terrain_ahead() if self.ahead_scanner is not None else None,
         )
+
+    FOOT_RADIUS = 0.02
+    """Go1's foot sphere (m): a planted foot's centre is this far above the ground."""
+
+    def ground_height(self) -> torch.Tensor:
+        """(N,) the height the robot stands on (m, world): its feet, less their radius."""
+        return self.robot.data.body_link_pos_w.torch[:, self.foot_ids, 2].mean(dim=1) - self.FOOT_RADIUS
+
+    def ahead_samples(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """(N, *lookahead.FINE_SHAPE, 2) world xy and (N, *FINE_SHAPE) world z of the lookahead
+        points, z -inf where a ray found nothing."""
+        hits = self.ahead_scanner.data.ray_hits_w.torch.reshape(-1, *lookahead.FINE_SHAPE, 3)
+        z = torch.where(torch.isfinite(hits[..., 2]), hits[..., 2], torch.full_like(hits[..., 2], float("-inf")))
+        return hits[..., :2], z
+
+    def terrain_ahead(self) -> torch.Tensor:
+        """(N, lookahead.FEATURE_DIM) the exact terrain ahead (every returned point known)."""
+        _, z = self.ahead_samples()
+        return lookahead.terrain_ahead(z, torch.isfinite(z), self.ground_height())
 
     def foot_heights(self) -> torch.Tensor:
         """(N, L) each foot's height relative to its hip (m), vertical, as `terrain()` measures

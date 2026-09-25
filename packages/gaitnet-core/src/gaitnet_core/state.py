@@ -43,6 +43,10 @@ class RobotState:
     base_command: torch.Tensor
     """(N, 3) the operator's velocity command before any nudge, base frame. Observers
     compute their nudges from it; the policy's features use `command`."""
+    terrain_ahead: torch.Tensor | None = None
+    """(N, gaitnet_core.lookahead.FEATURE_DIM) the terrain ahead of the robot, coarsely (see
+    `gaitnet_core.lookahead`), or None where nothing samples it. Only the `terrain_ahead`
+    feature reads it."""
 
     @property
     def num_robots(self) -> int:
@@ -57,11 +61,15 @@ class RobotState:
         return self.command.device
 
     def to(self, device: torch.device | str) -> "RobotState":
-        return replace(self, **{f.name: getattr(self, f.name).to(device) for f in fields(self)})
+        return replace(self, **{f.name: _apply(getattr(self, f.name), lambda t: t.to(device)) for f in fields(self)})
 
     def __getitem__(self, index) -> "RobotState":
         """Select a subset of robots."""
-        return replace(self, **{f.name: getattr(self, f.name)[index] for f in fields(self)})
+        return replace(self, **{f.name: _apply(getattr(self, f.name), lambda t: t[index]) for f in fields(self)})
+
+
+def _apply(value: torch.Tensor | None, fn):
+    return None if value is None else fn(value)
 
 
 @dataclass
