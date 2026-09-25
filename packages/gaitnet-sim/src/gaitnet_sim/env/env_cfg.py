@@ -28,6 +28,7 @@ from isaaclab_tasks.utils import preset
 
 from gaitnet_core.features import DEFAULT_FEATURES, LOOKAHEAD_FEATURES
 from gaitnet_sim.env import curriculum, observations, rewards, terminations
+from gaitnet_sim.env.constraints import FALL_TERMS, ConstraintTermination
 from gaitnet_sim.env.actions_cfg import FootstepControlActionCfg
 from gaitnet_sim.env.contract import GaitNetCfg
 from gaitnet_sim.env.scene import GaitNetSceneCfg
@@ -153,11 +154,16 @@ class RewardsCfg:
     # a step costs 0.2 x 0.04 = 0.008: enough that waiting is worth something, light enough that
     # starting two footsteps in one tick (max_steps_per_tick=2) is not priced out
     step_taken = RewTerm(func=rewards.step_taken, weight=-0.2)
-    terminating = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.5)
-    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-8.0)
-    foot_slip = RewTerm(func=rewards.foot_slip, weight=-6.0, params={"threshold": 1.0})
+    # presets=cat turns the limits below into constraints (gaitnet_sim.env.constraints): the
+    # penalties go, and the fall penalty counts falls only, not constraint terminations
+    terminating = preset(
+        default=RewTerm(func=mdp.is_terminated, weight=-200.0),
+        cat=RewTerm(func=rewards.terminated_by, weight=-200.0, params={"term_keys": FALL_TERMS}),
+    )
+    lin_vel_z_l2 = preset(default=RewTerm(func=mdp.lin_vel_z_l2, weight=-2.5), cat=None)
+    ang_vel_xy_l2 = preset(default=RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1), cat=None)
+    flat_orientation_l2 = preset(default=RewTerm(func=mdp.flat_orientation_l2, weight=-8.0), cat=None)
+    foot_slip = preset(default=RewTerm(func=rewards.foot_slip, weight=-6.0, params={"threshold": 1.0}), cat=None)
 
     # long horizon (presets=horizon): judge what a step leads to, not the instant
     window_tracking = preset(
@@ -186,6 +192,33 @@ class TerminationsCfg:
     terrain_out_of_bounds = DoneTerm(
         func=terminations.out_of_terrain, params={"distance_buffer": 0.5}, time_out=True
     )
+
+    # constraints as terminations (presets=cat): limits in physical units, see gaitnet_sim.env.constraints
+    slip_constraint = preset(
+        default=None, cat=DoneTerm(func=ConstraintTermination, params={"quantity": "foot_slip", "limit": 0.1, "p_max": 0.1})
+    )
+    """A planted foot sliding faster than 0.1 m/s."""
+    tilt_constraint = preset(
+        default=None, cat=DoneTerm(func=ConstraintTermination, params={"quantity": "tilt", "limit": 0.2, "p_max": 0.25})
+    )
+    """The base more than 0.2 rad (11 deg) from upright; a fall ends it at 20 deg."""
+    bounce_constraint = preset(
+        default=None, cat=DoneTerm(func=ConstraintTermination, params={"quantity": "vertical_speed", "limit": 0.3, "p_max": 0.1})
+    )
+    """The base moving up or down faster than 0.3 m/s."""
+    rates_constraint = preset(
+        default=None, cat=DoneTerm(func=ConstraintTermination, params={"quantity": "body_rates", "limit": 1.5, "p_max": 0.1})
+    )
+    """The base rolling or pitching faster than 1.5 rad/s."""
+    heading_constraint = preset(
+        default=None,
+        cat=DoneTerm(func=ConstraintTermination, params={"quantity": "heading_drift", "limit": 0.15, "p_max": 0.1, "window_s": 1.0}),
+    )
+    """Heading more than 0.15 rad off the commanded turning over the last second."""
+    stance_constraint = preset(
+        default=None, cat=DoneTerm(func=ConstraintTermination, params={"quantity": "short_stance", "limit": 0.1, "p_max": 0.1})
+    )
+    """Lifting a leg that landed less than 0.1 s ago."""
 
 
 _JOINT_POS_SCALE = 1.2

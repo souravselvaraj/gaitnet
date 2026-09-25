@@ -14,15 +14,34 @@ if TYPE_CHECKING:
     from isaaclab.terrains import TerrainImporter
 
 
+def _failed(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, failure_terms: list[str] | None) -> torch.Tensor:
+    """Which of `env_ids` ended their episode in failure: the named termination terms, or by
+    default every termination except time-outs and constraint terminations
+    (`gaitnet_sim.env.constraints`), which are not falls and move no one down."""
+    from gaitnet_sim.env.constraints import ConstraintTermination
+
+    termination = env.termination_manager
+    if failure_terms is None:
+        failure_terms = [
+            name for name in termination.active_terms
+            if not termination.get_term_cfg(name).time_out and termination.get_term_cfg(name).func is not ConstraintTermination
+        ]
+    failed = torch.zeros(len(env_ids), dtype=torch.bool, device=env.device)
+    for name in failure_terms:
+        failed |= termination.get_term(name)[env_ids]
+    return failed
+
+
 def terrain_levels_survival(
     env: "ManagerBasedRLEnv",
     env_ids: torch.Tensor,
     p_up_given_success: float = 0.1,
     p_down_given_failure: float = 0.5,
     p_random: float = 0.02,
+    failure_terms: list[str] | None = None,
 ) -> torch.Tensor:
     """Move robots that survived their episode up a level, and robots that fell down one,
-    each with some probability.
+    each with some probability. `failure_terms` limits "fell" to those termination terms.
 
     The level settles where P(fall) = p_up / (p_up + p_down), and the probabilities set how
     fast it moves and how much it spreads. `p_random` moves a robot up and down alike,
@@ -36,7 +55,7 @@ def terrain_levels_survival(
     n = len(env_ids)
     noise = torch.rand(n, device=env.device) < p_random
     move_up = (termination.time_outs[env_ids] & (torch.rand(n, device=env.device) < p_up_given_success)) | noise
-    move_down = (termination.terminated[env_ids] & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
+    move_down = (_failed(env, env_ids, failure_terms) & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
     terrain.update_env_origins(env_ids, move_up, move_down)
 
     low, high = terrain.cfg.terrain_generator.difficulty_range
@@ -53,6 +72,7 @@ def terrain_levels_progress(
     p_down_given_failure: float = 0.5,
     p_random: float = 0.02,
     action_name: str = "footstep",
+    failure_terms: list[str] | None = None,
 ) -> torch.Tensor:
     """`terrain_levels_survival`, except that surviving is not enough to move up: the robot
     must also have walked `required_fraction` of the distance its command asked for.
@@ -77,7 +97,7 @@ def terrain_levels_progress(
     success = termination.time_outs[env_ids] & progressed
     noise = torch.rand(n, device=env.device) < p_random
     move_up = (success & (torch.rand(n, device=env.device) < p_up_given_success)) | noise
-    move_down = (termination.terminated[env_ids] & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
+    move_down = (_failed(env, env_ids, failure_terms) & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
     terrain.update_env_origins(env_ids, move_up, move_down)
 
     low, high = terrain.cfg.terrain_generator.difficulty_range

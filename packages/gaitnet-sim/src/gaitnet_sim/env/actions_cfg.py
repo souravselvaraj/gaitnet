@@ -42,7 +42,7 @@ class FootstepControlActionCfg(ActionTermCfg):
     observation_noise: ObservationNoiseCfg | None = ObservationNoiseCfg()
     """Noise on the planner's view of the robot (`planner_observation`), None for the truth."""
 
-    step_quality = preset(default=False, horizon=True)
+    step_quality = preset(default=False, horizon=True, cat=True)
     """Record, for every footstep started, its foothold's clearance from hole edges and how
     long its leg had been down (`FootstepControlAction.step_clearance` / `step_stance_time`),
     for the long-horizon rewards (presets=horizon)."""

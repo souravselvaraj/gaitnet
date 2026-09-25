@@ -10,6 +10,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 
 from gaitnet_core.bundle import BundleError, PolicyBundle
 from gaitnet_sim.env.commands import FixedVelocityCommandCfg
+from gaitnet_sim.env.constraints import strip_constraints
 from gaitnet_sim.env.env_cfg import GaitNetEnvCfg
 from gaitnet_sim.env.scene import SCANNER_NAMES, ahead_scanner_cfg, foothold_scanner_cfg
 from gaitnet_sim.env.terminations import out_of_sub_terrain
@@ -82,6 +83,8 @@ def make_eval_env_cfg(
         allow_over_budget: build a terrain over the collision-triangle budget anyway
     """
     apply_bundle_contract(env_cfg, bundle)
+    # a robot runs until it falls or its time is up, whatever constraints it trained under
+    strip_constraints(env_cfg)
     if not randomize:
         env_cfg.play_mode()
     num_envs = len(difficulties) * envs_per_difficulty

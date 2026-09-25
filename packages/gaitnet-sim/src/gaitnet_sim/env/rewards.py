@@ -92,21 +92,13 @@ def _wrap(angle: torch.Tensor) -> torch.Tensor:
     return torch.remainder(angle + math.pi, 2 * math.pi) - math.pi
 
 
-class WindowTracking(ManagerTermBase):
-    """Command tracking over a window: how far the base went against how far the commands
-    asked it to go, over the last `window_s`.
+class CommandWindow:
+    """Per robot, the last `window_s` of base motion against the operator's command: where the
+    base went (world xy, unwrapped heading) and where the commands asked it to go. Shared by the
+    window reward (`WindowTracking`) and the heading-drift constraint."""
 
-    With `quantity="xy"` it is exp(-(|displacement error| / window)^2 / std^2), world xy: a
-    robot that tracks every instant but keeps slowing down or drifting sideways scores low,
-    where the instantaneous tracking terms forgive it step by step. With
-    `quantity="heading"` it is the squared heading error accumulated over the window (rad^2),
-    against the commanded yaw rate: use it as a penalty. Both read the operator's command
-    (before any nudge), and give 0 until an episode has `min_window_s` of history.
-    """
-
-    def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRLEnv"):
-        super().__init__(cfg, env)
-        self.window = max(1, round(cfg.params.get("window_s", 1.0) / env.step_dt))
+    def __init__(self, env: "ManagerBasedRLEnv", window_s: float):
+        self.window = max(1, round(window_s / env.step_dt))
         n, device, slots = env.num_envs, env.device, self.window + 1
         # per robot, the latest `window` + 1 values of: position, cumulative commanded
         # displacement, unwrapped heading, cumulative commanded heading change
@@ -121,15 +113,9 @@ class WindowTracking(ManagerTermBase):
     def reset(self, env_ids=None) -> None:
         self.count[slice(None) if env_ids is None else env_ids] = 0
 
-    def __call__(
-        self,
-        env: "ManagerBasedRLEnv",
-        window_s: float = 1.0,
-        std: float = 0.1,
-        quantity: Literal["xy", "heading"] = "xy",
-        min_window_s: float = 0.2,
-        action_name: str = "footstep",
-    ) -> torch.Tensor:
+    def update(self, env: "ManagerBasedRLEnv", action_name: str = "footstep") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Record this env step; returns (N,) steps of history in the window, the (N, 2)
+        displacement error (actual - commanded, m) and the (N,) heading error (rad) over it."""
         term = footstep_action(env, action_name)
         data = term.io.robot.data
         dt = env.step_dt
@@ -157,16 +143,58 @@ class WindowTracking(ManagerTermBase):
         back = (self.count - 1).clamp(max=self.window)  # steps of history in the window
         old = (now - back) % slots
         rows = torch.arange(position.shape[0], device=position.device)
+        displacement_error = (position - self.position[rows, old]) - (commanded - self.commanded[rows, old])
+        heading_error = (heading - self.heading[rows, old]) - (commanded_heading - self.commanded_heading[rows, old])
+        return back, displacement_error, heading_error
+
+
+class WindowTracking(ManagerTermBase):
+    """Command tracking over a window: how far the base went against how far the commands
+    asked it to go, over the last `window_s`.
+
+    With `quantity="xy"` it is exp(-(|displacement error| / window)^2 / std^2), world xy: a
+    robot that tracks every instant but keeps slowing down or drifting sideways scores low,
+    where the instantaneous tracking terms forgive it step by step. With
+    `quantity="heading"` it is the squared heading error accumulated over the window (rad^2),
+    against the commanded yaw rate: use it as a penalty. Both read the operator's command
+    (before any nudge), and give 0 until an episode has `min_window_s` of history.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: "ManagerBasedRLEnv"):
+        super().__init__(cfg, env)
+        self.tracker = CommandWindow(env, cfg.params.get("window_s", 1.0))
+
+    def reset(self, env_ids=None) -> None:
+        self.tracker.reset(env_ids)
+
+    def __call__(
+        self,
+        env: "ManagerBasedRLEnv",
+        window_s: float = 1.0,
+        std: float = 0.1,
+        quantity: Literal["xy", "heading"] = "xy",
+        min_window_s: float = 0.2,
+        action_name: str = "footstep",
+    ) -> torch.Tensor:
+        back, displacement_error, heading_error = self.tracker.update(env, action_name)
         if quantity == "xy":
-            error = (position - self.position[rows, old]) - (commanded - self.commanded[rows, old])
-            rate = error.norm(dim=-1) / (back.clamp(min=1) * dt)
+            rate = displacement_error.norm(dim=-1) / (back.clamp(min=1) * env.step_dt)
             value = torch.exp(-torch.square(rate / std))
         elif quantity == "heading":
-            error = (heading - self.heading[rows, old]) - (commanded_heading - self.commanded_heading[rows, old])
-            value = torch.square(error)
+            value = torch.square(heading_error)
         else:
             raise ValueError(f"quantity must be 'xy' or 'heading', got {quantity!r}")
-        return torch.where(back >= round(min_window_s / dt), value, torch.zeros_like(value))
+        return torch.where(back >= round(min_window_s / env.step_dt), value, torch.zeros_like(value))
+
+
+def terminated_by(env: "ManagerBasedRLEnv", term_keys: list[str]) -> torch.Tensor:
+    """1 where the episode ended on one of the named termination terms (e.g. the falls, and not
+    the constraint terminations of `gaitnet_sim.env.constraints`)."""
+    manager = env.termination_manager
+    ended = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for name in term_keys:
+        ended |= manager.get_term(name)
+    return ended.float()
 
 
 def _step_quality(env: "ManagerBasedRLEnv", action_name: str):
