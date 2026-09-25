@@ -22,7 +22,8 @@ class Terminations:
         self.cfgs = {"time_out": SimpleNamespace(time_out=True, func=None), "bad_orientation": SimpleNamespace(time_out=False, func=None)}
         if constraint is not None:
             self.terms["slip_constraint"] = torch.tensor(constraint)
-            self.cfgs["slip_constraint"] = SimpleNamespace(time_out=False, func=ConstraintTermination)
+            # as the manager holds it once built: an instance of the term class, not the class
+            self.cfgs["slip_constraint"] = SimpleNamespace(time_out=False, func=ConstraintTermination.__new__(ConstraintTermination))
         self.time_outs = self.terms["time_out"]
         self.terminated = torch.stack([t for n, t in self.terms.items() if n != "time_out"]).any(0)
         self.active_terms = list(self.terms)

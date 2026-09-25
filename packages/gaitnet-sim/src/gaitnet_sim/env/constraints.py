@@ -119,7 +119,8 @@ def constraint_terms(env_cfg) -> list[str]:
     names = []
     for name in env_cfg.terminations.__dataclass_fields__:
         term = getattr(env_cfg.terminations, name)
-        if term is not None and getattr(term, "func", None) is ConstraintTermination:
+        func = getattr(term, "func", None) if term is not None else None
+        if func is ConstraintTermination or isinstance(func, ConstraintTermination):
             names.append(name)
     return names
 

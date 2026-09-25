@@ -22,9 +22,13 @@ def _failed(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, failure_terms: list
 
     termination = env.termination_manager
     if failure_terms is None:
+        # a class term's func is its instance once the manager has built it, the class before
+        def is_constraint(func) -> bool:
+            return func is ConstraintTermination or isinstance(func, ConstraintTermination)
+
         failure_terms = [
             name for name in termination.active_terms
-            if not termination.get_term_cfg(name).time_out and termination.get_term_cfg(name).func is not ConstraintTermination
+            if not termination.get_term_cfg(name).time_out and not is_constraint(termination.get_term_cfg(name).func)
         ]
     failed = torch.zeros(len(env_ids), dtype=torch.bool, device=env.device)
     for name in failure_terms:
