@@ -75,7 +75,17 @@ class ObservationsCfg:
         """A distillation teacher's state: the true robot state. Its features must be the ones
         the teacher was trained on (the distillation algorithm checks)."""
 
-        robot_state = ObsTerm(func=observations.teacher_robot_state, params={"features": list(DEFAULT_FEATURES)})
+        robot_state = preset(
+            default=ObsTerm(func=observations.teacher_robot_state, params={"features": list(DEFAULT_FEATURES)}),
+            lookahead=ObsTerm(func=observations.teacher_robot_state, params={"features": list(LOOKAHEAD_FEATURES)}),
+        )
+        """With `presets=lookahead`, the true terrain ahead too (the student's comes through the camera map)."""
+
+    @configclass
+    class TeacherTerrainCfg(ObsGroup):
+        """The true terrain patches, for a teacher whose network reads terrain."""
+
+        heights = ObsTerm(func=observations.teacher_terrain_heights)
 
     @configclass
     class TeacherCandidatesCfg(ObsGroup):
@@ -96,6 +106,7 @@ class ObservationsCfg:
     """For feedback observers running in the actor during training."""
     teacher_state = preset(default=None, distill=TeacherStateCfg())
     teacher_candidates = preset(default=None, distill=TeacherCandidatesCfg())
+    teacher_terrain = preset(default=None, distill=TeacherTerrainCfg())
     """For a distillation teacher (`gaitnet_sim.rl.distillation`): the truth, without the camera
     map or observation noise the student's groups carry."""
 

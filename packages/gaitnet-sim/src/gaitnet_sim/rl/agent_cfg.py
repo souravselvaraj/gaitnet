@@ -201,7 +201,7 @@ class GaitNetDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     student = GaitNetActorCfg(network=preset(default=SMALL_CANDIDATE_SCORER, crop=SMALL_CROP_SCORER))
     """`presets=distill,crop` gives the student the terrain around each candidate (and the env its
     terrain group); the teacher needs neither, whatever its network."""
-    teacher = GaitNetActorCfg(candidates_group="teacher_candidates")
+    teacher = GaitNetActorCfg(candidates_group="teacher_candidates", terrain_group="teacher_terrain")
     """The teacher's network, duration floor and state features are replaced by its run's."""
     algorithm = CandidateDistillationAlgorithmCfg()
     logger = WriterCfg(class_name="gaitnet_sim.rl.mlflow_writer.MlflowLogWriter", experiment_name="gaitnet")

@@ -150,3 +150,19 @@ def test_horizon_preset_adds_the_long_horizon_rewards():
     assert rewards.window_tracking.weight > 0 and rewards.heading_drift.weight < 0
     assert rewards.foothold_edge.weight < 0 and rewards.short_stance.weight < 0
     assert env.actions.footstep.step_quality is True
+
+
+def test_distilling_a_terrain_and_lookahead_teacher():
+    register()
+    env, agent = resolve_task_config(
+        "GaitNet-Holes", "rsl_rl_distill_cfg_entry_point", overrides=["presets=distill,crop,lookahead"]
+    )
+    observations = env.observations
+    # the teacher's truth: state with the terrain ahead, and terrain patches of its own
+    assert observations.teacher_state.robot_state.params["features"][-1] == "terrain_ahead"
+    assert observations.teacher_terrain is not None and agent.teacher.terrain_group == "teacher_terrain"
+    # the student's camera view of both
+    assert observations.state.robot_state.params["features"][-1] == "terrain_ahead"
+    assert observations.terrain is not None and agent.student.network["candidate_features"] == "xyz_crop"
+    assert list(agent.student.state_features)[-1] == "terrain_ahead"
+    assert env.scene.ahead_scanner is not None

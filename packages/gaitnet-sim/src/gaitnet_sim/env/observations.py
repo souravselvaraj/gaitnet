@@ -83,6 +83,12 @@ def teacher_robot_state(env: "ManagerBasedRLEnv", features: list[str], action_na
     return state_vector(footstep_action(env, action_name).observation().state, features)
 
 
+def teacher_terrain_heights(env: "ManagerBasedRLEnv", action_name: str = "footstep") -> torch.Tensor:
+    """(N, L, *patch_size) the true terrain heights relative to each hip (m), for a teacher whose
+    network reads terrain (the student's `terrain` group reads the camera map instead)."""
+    return fill_unknown(footstep_action(env, action_name).terrain().heights)
+
+
 def teacher_candidates(
     env: "ManagerBasedRLEnv",
     candidates_group: str = "candidates",

@@ -359,3 +359,56 @@ def test_a_distillation_run_exports_its_student(tmp_path):
         expected = alg.student.network(obs["state"], candidates)
         got = bundle.actor(obs["state"], candidates)
     assert torch.equal(expected.step_logits, got.step_logits) and torch.equal(expected.duration, got.duration)
+
+
+def test_a_teacher_that_reads_terrain_and_the_terrain_ahead(tmp_path):
+    """A big teacher trained on the true terrain crop and the terrain ahead: built from its run,
+    it reads the teacher_terrain group (truth), while the student reads its own camera view."""
+    from gaitnet_core import lookahead
+    from gaitnet_core.features import LOOKAHEAD_FEATURES
+    from gaitnet_core.grid import FootholdGrid
+
+    torch.manual_seed(0)
+    grid = FootholdGrid()
+    crop_teacher = {**TEACHER_NET, "candidate_features": "xyz_crop", "grid": grid.to_dict(), "crop_radius": 2}
+    crop_student = {**STUDENT_NET, "candidate_features": "xyz_crop", "grid": grid.to_dict(), "crop_radius": 2}
+
+    def obs_with_terrain() -> TensorDict:
+        obs = make_obs()
+        ahead = torch.rand(N, lookahead.FEATURE_DIM)
+        obs["state"] = torch.cat([obs["state"], ahead], -1)
+        obs["teacher_state"] = torch.cat([obs["teacher_state"], ahead], -1)
+        obs["terrain"] = -0.27 + 0.01 * torch.randn(N, L, *grid.patch_size)
+        obs["teacher_terrain"] = -0.27 + 0.01 * torch.randn(N, L, *grid.patch_size)
+        return obs
+
+    obs = obs_with_terrain()
+    ppo_obs = TensorDict({"state": obs["teacher_state"], "candidates": obs["teacher_candidates"], "terrain": obs["teacher_terrain"]},
+                         batch_size=[N])
+    trained = GaitNetActor(ppo_obs, {"actor": ["state"]}, "actor", action_layout.dim(2), network=dict(crop_teacher),
+                           duration_std_floor=0.01, state_features=list(LOOKAHEAD_FEATURES))
+    checkpoint = write_teacher_run(tmp_path, trained, rounds=2, features=LOOKAHEAD_FEATURES, network=crop_teacher)
+    cfg = distill_cfg(checkpoint)
+    cfg["teacher"]["terrain_group"] = "teacher_terrain"
+    cfg["student"]["network"] = dict(crop_student)
+    cfg["student"]["state_features"] = list(LOOKAHEAD_FEATURES)
+
+    class Env(FakeEnv):
+        def get_observations(self):
+            return obs_with_terrain()
+
+    alg = CandidateDistillation.construct_algorithm(obs, Env(2), cfg, "cpu")
+    assert alg.teacher.terrain_group == "teacher_terrain" and alg.student.terrain_group == "terrain"
+    # the teacher scores exactly as it was trained, on the truth
+    with torch.no_grad():
+        candidates = Candidates.unpack(obs["teacher_candidates"])
+        expected = trained.network(obs["teacher_state"], candidates, obs["teacher_terrain"])
+        got = alg.teacher.network(obs["teacher_state"], candidates, obs["teacher_terrain"])
+    assert torch.equal(expected.step_logits, got.step_logits)
+    for _ in range(T):
+        with torch.inference_mode():
+            alg.act(obs)
+            obs = obs_with_terrain()
+            alg.process_env_step(obs, torch.randn(N), torch.zeros(N, dtype=torch.bool), {})
+    stats = alg.update()
+    assert all(torch.isfinite(torch.tensor(v)) for v in stats.values()), stats
