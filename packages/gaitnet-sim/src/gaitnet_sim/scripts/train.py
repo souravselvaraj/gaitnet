@@ -4,7 +4,9 @@
         --task GaitNet-Holes --num_envs 1024
 
 All of Isaac Lab's train arguments work (`--max_iterations`, `--seed`, `--checkpoint`, ...),
-and so do presets and Hydra overrides of the env and agent cfgs, e.g.
+plus `--tf32`, which lets float32 matrix products run on the tensor cores (TF32: 10-bit
+mantissa, several times the fp32 rate on Ampere and later); worth it for wide scorers, whose
+update is most of an iteration. Presets and Hydra overrides of the env and agent cfgs work too, e.g.
 `presets=spatial,privileged agent.algorithm.entropy_coef=0.01`; see
 packages/gaitnet-sim/README.md. Runs are written to
 `logs/rsl_rl/<experiment_name>/<timestamp>` and tracked in MLflow.
@@ -35,12 +37,24 @@ def _diff_this_repo_only() -> None:
     Logger._store_code_state = patched
 
 
+def _allow_tf32() -> None:
+    import torch
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+
 def main(argv: list[str] | None = None) -> None:
     from isaaclab_rl.entrypoints.backends.train_rsl_rl import run
 
     _diff_this_repo_only()
 
-    run(["--external_callback", "gaitnet_sim.tasks.register", *(sys.argv[1:] if argv is None else argv)])
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--tf32" in argv:
+        argv.remove("--tf32")
+        _allow_tf32()
+
+    run(["--external_callback", "gaitnet_sim.tasks.register", *argv])
 
 
 if __name__ == "__main__":
