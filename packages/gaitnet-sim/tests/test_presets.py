@@ -139,3 +139,14 @@ def test_lookahead_preset_adds_the_scanner_and_the_feature():
     assert env.scene.ahead_scanner is not None
     features = env.observations.state.robot_state.params["features"]
     assert features[-1] == "terrain_ahead" and list(agent.actor.state_features) == list(features)
+
+
+def test_horizon_preset_adds_the_long_horizon_rewards():
+    env, _ = resolve()
+    assert env.rewards.window_tracking is None and env.rewards.foothold_edge is None
+    assert env.actions.footstep.step_quality is False
+    env, _ = resolve("presets=horizon")
+    rewards = env.rewards
+    assert rewards.window_tracking.weight > 0 and rewards.heading_drift.weight < 0
+    assert rewards.foothold_edge.weight < 0 and rewards.short_stance.weight < 0
+    assert env.actions.footstep.step_quality is True

@@ -148,6 +148,22 @@ class RewardsCfg:
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-8.0)
     foot_slip = RewTerm(func=rewards.foot_slip, weight=-6.0, params={"threshold": 1.0})
 
+    # long horizon (presets=horizon): judge what a step leads to, not the instant
+    window_tracking = preset(
+        default=None,
+        horizon=RewTerm(func=rewards.WindowTracking, weight=0.5, params={"window_s": 1.0, "std": 0.1, "quantity": "xy"}),
+    )
+    """Displacement over the last second against what the commands asked for."""
+    heading_drift = preset(
+        default=None,
+        horizon=RewTerm(func=rewards.WindowTracking, weight=-2.0, params={"window_s": 1.0, "quantity": "heading"}),
+    )
+    """Squared heading error accumulated over the last second (rad^2)."""
+    foothold_edge = preset(default=None, horizon=RewTerm(func=rewards.foothold_edge, weight=-2.0, params={"margin_cells": 6}))
+    """Per footstep, how little room its foothold leaves to a hole edge."""
+    short_stance = preset(default=None, horizon=RewTerm(func=rewards.short_stance, weight=-2.0, params={"min_stance_s": 0.1}))
+    """Per footstep, lifting a leg that landed less than 0.1 s ago."""
+
 
 @configclass
 class TerminationsCfg:

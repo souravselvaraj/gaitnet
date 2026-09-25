@@ -18,6 +18,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import ActionTerm
@@ -28,7 +29,7 @@ from gaitnet_core.candidates import Candidates
 from gaitnet_core.interfaces import FootstepCommand, LowLevelController
 from gaitnet_core.samplers import make_sampler
 from gaitnet_core.state import Observation, RobotState, TerrainPatch
-from gaitnet_core.terrain import inner_heights
+from gaitnet_core.terrain import inner_heights, valid_footholds
 from gaitnet_sim.env.noise import corrupt
 from gaitnet_sim.env.perception import FrontCameraMap
 from gaitnet_sim.robot_io import RobotIO
@@ -70,6 +71,13 @@ class FootstepControlAction(ActionTerm):
         self._footsteps = [FootstepCommand.none(self.num_envs, device=self.device) for _ in range(self.rounds)]
         self._planner_observation: Observation | None = None
         self._candidates: dict[tuple, Candidates] = {}
+        self.step_clearance = torch.full((self.num_envs, self.rounds), float("inf"), device=self.device)
+        """(N, R) for each footstep started on the latest env step, its foothold's distance to the
+        nearest edge cell of the true terrain (cells, Chebyshev, up to `cfg.step_quality_margin`
+        + 1); inf where no step started. Filled only with `cfg.step_quality`."""
+        self.step_stance_time = torch.full((self.num_envs, self.rounds), float("inf"), device=self.device)
+        """(N, R) for each footstep started on the latest env step, how long its leg had been in
+        scheduled stance (s); inf where no step started. Filled only with `cfg.step_quality`."""
         self.episode_progress = torch.zeros(self.num_envs, device=self.device)
         """(N,) distance walked this episode along the operator's command direction (m)."""
         self.episode_commanded = torch.zeros(self.num_envs, device=self.device)
@@ -204,6 +212,8 @@ class FootstepControlAction(ActionTerm):
             buffer.duration[:] = torch.where(footsteps.active, duration, footsteps.duration)
         if self.cfg.apply_nudge:
             self._nudge[:] = action.nudge
+        if self.cfg.step_quality:
+            self._assess_steps()
         # rounds step different legs (the policy only offers eligible ones), and both
         # controllers keep each leg's swing apart, so they are started one after another
         for buffer in self._footsteps:
@@ -215,6 +225,31 @@ class FootstepControlAction(ActionTerm):
             joint_pos, joint_vel, self.io.base_pose(), self.io.base_vel(), self.effective_command()
         )
         self._asset.actuators.target_command.set_effort_index(value=torques, joint_ids=self.io.joint_ids)
+
+    def _assess_steps(self) -> None:
+        """Fill `step_clearance` and `step_stance_time` for the footsteps about to start, from
+        the true terrain and the controller's schedule before they do."""
+        timing = self.controller.gait_timing()
+        rows = torch.arange(self.num_envs, device=self.device)
+        rules = self._env.cfg.gaitnet.foothold_rules()
+        # edges only (no margin): the cells a foothold must keep its distance from
+        edge = ~valid_footholds(self.terrain().heights, self.spec, self.grid, rules.step_threshold, 0)
+        margin = self.cfg.step_quality_margin
+        for r, footsteps in enumerate(self._footsteps):
+            active = footsteps.active
+            self.step_clearance[:, r] = float("inf")
+            self.step_stance_time[:, r] = float("inf")
+            if not active.any():
+                continue
+            leg = footsteps.leg.clamp(0, self.spec.num_legs - 1)
+            self.step_stance_time[:, r] = torch.where(active, timing[rows, leg, 2], self.step_stance_time[:, r])
+            cell, _ = self.grid.xy_to_cell(footsteps.target[:, :2])
+            leg_edges = edge[rows, leg].float().unsqueeze(1)  # (N, 1, size_x, size_y)
+            clearance = torch.full((self.num_envs,), float(margin + 1), device=self.device)
+            for k in range(margin, -1, -1):  # the smallest k whose neighbourhood holds an edge wins
+                near = F.max_pool2d(leg_edges, 2 * k + 1, stride=1, padding=k)[rows, 0, cell[:, 0], cell[:, 1]] > 0
+                clearance = torch.where(near, torch.full_like(clearance, float(k)), clearance)
+            self.step_clearance[:, r] = torch.where(active, clearance, self.step_clearance[:, r])
 
     def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None) -> None:
         if env_ids is None:
@@ -230,5 +265,7 @@ class FootstepControlAction(ActionTerm):
             self.camera_map.reset(ids, self._env.scene.env_origins[ids, :2])
         self.episode_progress[ids] = 0.0
         self.episode_commanded[ids] = 0.0
+        self.step_clearance[ids] = float("inf")
+        self.step_stance_time[ids] = float("inf")
         self._planner_observation = None
         self._candidates.clear()

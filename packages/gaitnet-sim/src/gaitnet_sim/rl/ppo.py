@@ -162,6 +162,9 @@ class ScheduledPPO(PPO):
         return saved
 
     def load(self, loaded_dict: dict, load_cfg: dict | None, strict: bool) -> bool:
+        if load_cfg is None and "optimizer_state_dict" not in loaded_dict:
+            # a warm start (e.g. scripts/widen_checkpoint): fresh optimizer, models loaded
+            load_cfg = {"actor": True, "critic": True, "optimizer": False, "iteration": True, "rnd": True}
         load_iteration = super().load(loaded_dict, load_cfg, strict)
         if load_iteration:
             # the runner resumes at the checkpoint's iteration, and so do the schedules

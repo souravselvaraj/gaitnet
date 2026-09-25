@@ -102,7 +102,7 @@ def test_action_term_clamps_executed_durations_but_not_the_stored_action():
 
     sent = []
     term = FootstepControlAction.__new__(FootstepControlAction)
-    term.cfg = SimpleNamespace(clamp_duration=True, apply_nudge=True)
+    term.cfg = SimpleNamespace(clamp_duration=True, apply_nudge=True, step_quality=False)
     term.spec = GO1
     term.controller = SimpleNamespace(
         command_footsteps=lambda footsteps: sent.append(footsteps.duration.clone()), close=lambda: None
@@ -122,3 +122,47 @@ def test_action_term_clamps_executed_durations_but_not_the_stored_action():
     low, high = GO1.swing_duration_range
     assert sent[0][:3].tolist() == pytest.approx([low, low, 0.2])
     assert term.raw_actions[:, 1].tolist() == pytest.approx(actions[:, 1].tolist())
+
+
+def test_step_quality_measures_edge_clearance_and_stance_time():
+    """A foothold's distance to the nearest hole edge on the true terrain, and how long its
+    leg had been down, recorded when the step starts."""
+    from types import SimpleNamespace
+
+    from gaitnet_core.interfaces import FootstepCommand
+    from gaitnet_core.planner import FootholdRules
+    from gaitnet_core.robot_spec import GO1
+    from gaitnet_core.state import TerrainPatch
+    from gaitnet_sim.env.actions import FootstepControlAction
+    from gaitnet_sim.env.contract import GaitNetCfg
+
+    grid = GaitNetCfg().foothold_grid()
+    n = 3
+    term = FootstepControlAction.__new__(FootstepControlAction)
+    term.cfg = SimpleNamespace(step_quality=True, step_quality_margin=6)
+    term.spec, term.grid, term.rounds = GO1, grid, 1
+    heights = torch.full((n, 4, *grid.patch_size), -0.27)
+    b = grid.border
+    heights[:, :, b + 12, b + 20:] = -0.8   # a hole on the right, from inner column 20
+    term.terrain = lambda: TerrainPatch(heights=heights, grid=grid)
+    timing = torch.zeros(n, 4, 3)
+    timing[:, :, 2] = torch.tensor([0.5, 0.05, 0.3, 0.2])
+    term.controller = SimpleNamespace(gait_timing=lambda: timing, close=lambda: None)
+    term._env = SimpleNamespace(
+        cfg=SimpleNamespace(gaitnet=SimpleNamespace(foothold_rules=lambda: FootholdRules())), num_envs=n, device="cpu"
+    )
+    steps = FootstepCommand.none(n)
+    steps.active[:] = torch.tensor([True, True, False])
+    steps.leg[:] = torch.tensor([0, 1, 0])
+    # robot 0 steps at the hip (12 cells from the hole's edge cells), robot 1 right beside the hole
+    steps.target[0, :2] = grid.cell_to_xy(torch.tensor([12, 12]))
+    steps.target[1, :2] = grid.cell_to_xy(torch.tensor([12, 18]))
+    term._footsteps = [steps]
+    term.step_clearance = torch.full((n, 1), float("inf"))
+    term.step_stance_time = torch.full((n, 1), float("inf"))
+    term._assess_steps()
+    # edge cells straddle the drop: inner column 19 (and 20) are edges, so column 18 is 1 cell away
+    assert term.step_clearance[0, 0] == 7.0         # beyond the 6-cell margin
+    assert term.step_clearance[1, 0] == 1.0
+    assert torch.isinf(term.step_clearance[2, 0])   # no step
+    assert term.step_stance_time[:, 0].tolist() == pytest.approx([0.5, 0.05, float("inf")])
