@@ -77,14 +77,17 @@ def terrain_levels_progress(
     p_random: float = 0.02,
     action_name: str = "footstep",
     failure_terms: list[str] | None = None,
+    stalled_is_failure: bool = False,
 ) -> torch.Tensor:
     """`terrain_levels_survival`, except that surviving is not enough to move up: the robot
     must also have walked `required_fraction` of the distance its command asked for.
 
     Promoting on survival alone rewards creeping: a robot that stands still survives, and the
     curriculum then pushes it to harder terrain than a robot that walks and sometimes falls.
-    A robot that survived without making progress stays where it is. Episodes whose command
-    asked for less than `min_commanded` m (standing still) count survival as success.
+    A robot that survived without making progress stays where it is, or, with
+    `stalled_is_failure`, moves down like a fall: then the levels settle where robots still
+    walk, not where they can merely stand. Episodes whose command asked for less than
+    `min_commanded` m (standing still) count survival as success.
 
     Returns:
         The mean difficulty over all robots.
@@ -101,7 +104,10 @@ def terrain_levels_progress(
     success = termination.time_outs[env_ids] & progressed
     noise = torch.rand(n, device=env.device) < p_random
     move_up = (success & (torch.rand(n, device=env.device) < p_up_given_success)) | noise
-    move_down = (_failed(env, env_ids, failure_terms) & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
+    failed = _failed(env, env_ids, failure_terms)
+    if stalled_is_failure:
+        failed |= termination.time_outs[env_ids] & ~progressed
+    move_down = (failed & (torch.rand(n, device=env.device) < p_down_given_failure)) | noise
     terrain.update_env_origins(env_ids, move_up, move_down)
 
     low, high = terrain.cfg.terrain_generator.difficulty_range

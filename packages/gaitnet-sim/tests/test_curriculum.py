@@ -66,6 +66,16 @@ def test_survival_without_progress_does_not_promote():
     assert moves["down"].tolist() == [False, False, True, False]
 
 
+def test_stalled_robots_move_down_when_asked():
+    # walked (promote), crept 0.5 m of 4 (stalled), fell (demote), stood still on a stand-still command (promote)
+    args = ([True, True, False, True], [False, False, True, False], [2.0, 0.5, 1.0, 0.0], [4.0, 4.0, 4.0, 0.1])
+    env, moves = fake_env(*args)
+    terrain_levels_progress(env, torch.arange(4), p_up_given_success=1.0, p_down_given_failure=1.0, p_random=0.0,
+                            stalled_is_failure=True)
+    assert moves["up"].tolist() == [True, False, False, True]
+    assert moves["down"].tolist() == [False, True, True, False]
+
+
 def test_constraint_terminations_are_not_falls():
     """A robot ended by a constraint (CaT) is neither promoted nor demoted; only falls demote."""
     from gaitnet_sim.env.curriculum import terrain_levels_survival
