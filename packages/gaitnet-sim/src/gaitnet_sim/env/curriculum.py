@@ -113,3 +113,14 @@ def terrain_levels_progress(
     low, high = terrain.cfg.terrain_generator.difficulty_range
     level = torch.mean(terrain.terrain_levels.float()) / terrain.max_terrain_level
     return low + level * (high - low)
+
+
+def terrain_levels_walk(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, **kwargs) -> torch.Tensor:
+    """`terrain_levels_progress` with `stalled_is_failure=True`: robots move up only by walking,
+    and one that survives without walking moves down. A name to put in `func=`, since a term's
+    empty `params` can't take a new key from the command line.
+
+    The survival curriculum let a large policy learn to stand still on dense holes (t3: 0.1-0.2
+    of its commanded distance at 0.3-0.4 hole density, ~0 at 0.5-0.7, never falling) and then
+    promoted it for surviving."""
+    return terrain_levels_progress(env, env_ids, stalled_is_failure=True, **kwargs)
