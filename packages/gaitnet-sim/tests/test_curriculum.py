@@ -85,6 +85,20 @@ def test_walk_curriculum_is_progress_with_stalled_demotion():
     assert moves["down"].tolist() == [False, True, True, False]
 
 
+def test_walk_curriculum_signature_passes_isaac_lab_term_check():
+    """Isaac Lab's term cfg check treats **kwargs as a mandatory parameter; every parameter needs a default."""
+    import inspect
+
+    from gaitnet_sim.env.curriculum import terrain_levels_progress, terrain_levels_walk
+
+    params = list(inspect.signature(terrain_levels_walk).parameters.values())
+    assert [p.name for p in params[:2]] == ["env", "env_ids"]
+    assert all(p.default is not inspect.Parameter.empty for p in params[2:])
+    assert all(p.kind is not inspect.Parameter.VAR_KEYWORD for p in params)
+    progress = set(inspect.signature(terrain_levels_progress).parameters) - {"stalled_is_failure"}
+    assert set(p.name for p in params) == progress
+
+
 def test_constraint_terminations_are_not_falls():
     """A robot ended by a constraint (CaT) is neither promoted nor demoted; only falls demote."""
     from gaitnet_sim.env.curriculum import terrain_levels_survival

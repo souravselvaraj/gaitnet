@@ -115,12 +115,27 @@ def terrain_levels_progress(
     return low + level * (high - low)
 
 
-def terrain_levels_walk(env: "ManagerBasedRLEnv", env_ids: torch.Tensor, **kwargs) -> torch.Tensor:
+def terrain_levels_walk(
+    env: "ManagerBasedRLEnv",
+    env_ids: torch.Tensor,
+    required_fraction: float = 0.5,
+    min_commanded: float = 0.2,
+    p_up_given_success: float = 0.1,
+    p_down_given_failure: float = 0.5,
+    p_random: float = 0.02,
+    action_name: str = "footstep",
+    failure_terms: list[str] | None = None,
+) -> torch.Tensor:
     """`terrain_levels_progress` with `stalled_is_failure=True`: robots move up only by walking,
     and one that survives without walking moves down. A name to put in `func=`, since a term's
-    empty `params` can't take a new key from the command line.
+    empty `params` can't take a new key from the command line. (Explicit parameters, not
+    **kwargs: Isaac Lab's term cfg check reads a **kwargs as a mandatory parameter.)
 
     The survival curriculum let a large policy learn to stand still on dense holes (t3: 0.1-0.2
     of its commanded distance at 0.3-0.4 hole density, ~0 at 0.5-0.7, never falling) and then
     promoted it for surviving."""
-    return terrain_levels_progress(env, env_ids, stalled_is_failure=True, **kwargs)
+    return terrain_levels_progress(
+        env, env_ids, required_fraction=required_fraction, min_commanded=min_commanded,
+        p_up_given_success=p_up_given_success, p_down_given_failure=p_down_given_failure,
+        p_random=p_random, action_name=action_name, failure_terms=failure_terms, stalled_is_failure=True,
+    )
