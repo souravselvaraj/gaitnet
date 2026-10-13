@@ -135,7 +135,13 @@ def get_logger():
 
 # Delete old log files (only if logging to file)
 if not no_log_file:
-    log_files = sorted(log_dir.glob("*.log"), key=lambda f: f.stat().st_mtime)
+    stamped = []
+    for f in log_dir.glob("*.log"):
+        try:
+            stamped.append((f.stat().st_mtime, f))
+        except FileNotFoundError:  # deleted by another gaitnet process starting at the same moment
+            pass
+    log_files = [f for _, f in sorted(stamped)]
     max_logs = 10
     while len(log_files) >= max_logs:
         oldest = log_files.pop(0)
@@ -145,7 +151,7 @@ if not no_log_file:
         except Exception as e:
             logger.debug(f"failed to delete {oldest}: {e}")
         del oldest
-    del log_files, max_logs
+    del stamped, log_files, max_logs
 
 del (
     ch,
