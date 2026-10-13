@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 
 from typing import Sequence
 from rsl_rl.modules import ActorCritic
@@ -11,6 +12,22 @@ from torch.distributions import Normal, Categorical
 import gaitnet.constants as const
 
 logger = get_logger()
+
+
+NUM_OPTIONS = const.gait_net.num_footstep_options * const.robot.num_legs + 1
+"""Candidate slots in the observation: K footholds per leg in slot order, then the no-op."""
+
+
+def candidate_block(obs: torch.Tensor, num_options: int = NUM_OPTIONS) -> torch.Tensor:
+    """(N, num_options, 8) the candidates, obs[:, 25 : 25 + num_options * 8].
+
+    Sliced explicitly so anything appended after them (the policy history, privileged
+    inputs) is not mistaken for more candidates.
+    """
+    start = const.gait_net.robot_state_dim
+    end = start + num_options * const.gait_net.footstep_option_dim
+    assert obs.shape[1] >= end, f"observation has {obs.shape[1]} values, candidates need {end}"
+    return obs[:, start:end].view(obs.shape[0], num_options, const.gait_net.footstep_option_dim)
 
 
 def make_mlp(
@@ -107,15 +124,8 @@ class GaitnetActor(nn.Module):
         num_envs = obs.shape[0]
         shared_state = obs[:, : const.gait_net.robot_state_dim]
 
-        remaining_obs_size = obs.shape[1] - const.gait_net.robot_state_dim
-        unique_states_dim = remaining_obs_size / const.gait_net.footstep_option_dim
-        assert (
-            unique_states_dim.is_integer()
-        ), f"Expected unique_state_size ({const.gait_net.footstep_option_dim}) to evenly divide the remaining observation size ({remaining_obs_size}), got {unique_states_dim}"
-        unique_states_dim = int(unique_states_dim)
-        unique_states = obs[:, const.gait_net.robot_state_dim :].view(
-            num_envs, unique_states_dim, const.gait_net.footstep_option_dim
-        )
+        unique_states_dim = NUM_OPTIONS
+        unique_states = candidate_block(obs, unique_states_dim)
         unique_states_iter = torch.split(unique_states, 1, dim=1)
 
         shared_embedding: torch.Tensor = self.shared_encoder(shared_state)
@@ -211,6 +221,7 @@ class GaitnetCritic(nn.Module):
     ):
         super().__init__()
         logger.info("GaitnetCritic initializing")
+        self.num_unique_states = num_unique_states
 
         self.shared_encoder = make_mlp(
             input_size=shared_state_dim,
@@ -246,6 +257,26 @@ class GaitnetCritic(nn.Module):
         )
         logger.info(f"trunk_combiner_head: {self.trunk_combiner_head}")
 
+        self.noop_index = 4
+        """One-hot column read as "this slot is a no-op". 4 is what every checkpoint's critic was
+        trained with, but the one-hot is (no-op, FR, FL, RR, RL), so 4 is the RL leg: the critic
+        sees every RL candidate as a no-op and encodes the real no-op and padding slots as footholds.
+        0 is the no-op column."""
+        self.tail_encoder: nn.Module | None = None
+        self.tail_projection: nn.Linear | None = None
+
+    def add_tail(self, tail_dim: int, layer_sizes: Sequence[int] = (256, 128)) -> None:
+        """Also read the `tail_dim` observation values after the candidates (the policy history,
+        and the privileged features where the env carries them): an asymmetric critic, since the
+        actor never sees them. They are encoded and added to the state embedding through a
+        zero-initialised projection, so the critic computes exactly what it did until they get weight.
+        """
+        device = next(self.parameters()).device
+        self.tail_encoder = make_mlp(tail_dim, layer_sizes[:-1], layer_sizes[-1], output_activation=nn.ReLU).to(device)
+        self.tail_projection = nn.Linear(layer_sizes[-1], self.shared_encoder[-2].out_features).to(device)
+        nn.init.zeros_(self.tail_projection.weight)
+        nn.init.zeros_(self.tail_projection.bias)
+
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass for the MiMo network.
 
@@ -258,25 +289,21 @@ class GaitnetCritic(nn.Module):
         num_envs = obs.shape[0]
         shared_state = obs[:, : const.gait_net.robot_state_dim]
 
-        remaining_obs_size = obs.shape[1] - const.gait_net.robot_state_dim
-        unique_states_dim = remaining_obs_size / const.gait_net.footstep_option_dim
-        assert (
-            unique_states_dim.is_integer()
-        ), f"Expected unique_state_size ({const.gait_net.footstep_option_dim}) to evenly divide the remaining observation size ({remaining_obs_size}), got {unique_states_dim}"
-        unique_states_dim = int(unique_states_dim)
-        unique_states = obs[:, const.gait_net.robot_state_dim :].view(
-            num_envs, unique_states_dim, const.gait_net.footstep_option_dim
-        )
+        unique_states_dim = self.num_unique_states
+        unique_states = candidate_block(obs, unique_states_dim)
         unique_states_iter = torch.split(unique_states, 1, dim=1)
 
         shared_embedding: torch.Tensor = self.shared_encoder(shared_state)
+        if self.tail_encoder is not None:
+            tail = obs[:, const.gait_net.robot_state_dim + unique_states_dim * const.gait_net.footstep_option_dim :]
+            shared_embedding = shared_embedding + self.tail_projection(self.tail_encoder(tail))
 
         unique_embeddings = []
         for unique_state in unique_states_iter:
             # remove the extra dimension
             unique_state = unique_state.squeeze(1)
             # check if this is a no-op state
-            no_op_mask = unique_state[:, 4] == 1
+            no_op_mask = unique_state[:, self.noop_index] == 1
             # also treat high cost as no-op
             no_op_mask = no_op_mask | (unique_state[:, -1] >= 2.0)
 
@@ -321,6 +348,8 @@ class GaitnetActorCritic(ActorCritic):
         duration_std: float = 0.01,  # Standard deviation for duration noise
         actor_obs_normalization=False,
         critic_obs_normalization=False,
+        actor_chunk_size: int | None = None,
+        actor_obs_dim: int | None = None,
         **kwargs,
     ):
         """
@@ -335,6 +364,13 @@ class GaitnetActorCritic(ActorCritic):
             init_noise_std (float, optional): _description_. Defaults to 1.0.
             noise_std_type (str, optional): _description_. Defaults to "scalar".
             duration_std (float, optional): _description_. Defaults to 0.01.
+            actor_chunk_size: run the actor over batches larger than this in chunks, each
+                activation-checkpointed when gradients are on (GaitNet-T: its attention
+                cannot launch on a 128k-sample PPO minibatch, and would not fit if it could).
+                None (default) runs the actor on the whole batch.
+            actor_obs_dim: give the actor only the first this-many observation values (a
+                distilled student, which must not see the teacher's privileged tail). None
+                (default) gives it all of them.
         """
         self.actor_obs_normalization = actor_obs_normalization
         self.critic_obs_normalization = critic_obs_normalization
@@ -355,6 +391,8 @@ class GaitnetActorCritic(ActorCritic):
 
         self.actor = actor
         self.critic = critic
+        self.actor_chunk_size = actor_chunk_size
+        self.actor_obs_dim = actor_obs_dim
 
         # Store the number of options (should match num_actions from environment)
         self.num_options = (
@@ -376,6 +414,21 @@ class GaitnetActorCritic(ActorCritic):
     def reset(self, dones=None):
         """Reset recurrent states (no-op for non-recurrent policy)."""
         pass
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True) -> bool:
+        """As ActorCritic's, except that a checkpoint saved without the critic's tail (GaitnetCritic.
+        add_tail) loads into a critic that has one, which then starts out as the saved critic. That
+        returns False, so the runner neither restores the optimizer (it has no state for the tail)
+        nor the iteration; train.py sets the iteration and warms the fresh optimizer up."""
+        missing = [k for k in self.state_dict() if k not in state_dict]
+        if missing and all(k.startswith("critic.tail_") for k in missing):
+            result = nn.Module.load_state_dict(self, state_dict, strict=False)
+            if result.unexpected_keys:
+                raise RuntimeError(f"unexpected keys in the checkpoint: {result.unexpected_keys}")
+            logger.info(f"checkpoint has no critic tail; {len(missing)} tail tensors start at their init")
+            self.loaded_without_critic_tail = True
+            return False
+        return super().load_state_dict(state_dict, strict=strict)
 
     def forward(self):
         raise NotImplementedError
@@ -450,6 +503,21 @@ class GaitnetActorCritic(ActorCritic):
 
         return discrete_entropy + duration_entropy
 
+    def _actor_forward(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """The actor's (logits, durations), chunked over the batch if `actor_chunk_size` says so."""
+        if self.actor_obs_dim is not None:
+            observations = observations[:, : self.actor_obs_dim]
+        chunk = self.actor_chunk_size
+        if chunk is None or observations.shape[0] <= chunk:
+            return self.actor(observations)
+        outputs = []
+        for part in observations.split(chunk):
+            if torch.is_grad_enabled():
+                outputs.append(torch.utils.checkpoint.checkpoint(self.actor, part, use_reentrant=False))
+            else:
+                outputs.append(self.actor(part))
+        return torch.cat([o[0] for o in outputs]), torch.cat([o[1] for o in outputs])
+
     def update_distribution(self, observations):
         """Update the action distribution based on observations.
 
@@ -462,7 +530,7 @@ class GaitnetActorCritic(ActorCritic):
         """
         observations = observations["policy"]
         # Get logits and duration means from actor
-        logits, duration_means = self.actor(observations)  # Access underlying actor
+        logits, duration_means = self._actor_forward(observations)
         # logits: (num_envs, num_options)
         # duration_means: (num_envs, num_options)
 
@@ -486,9 +554,7 @@ class GaitnetActorCritic(ActorCritic):
                 self.episode_info["leg_option_std"] = option_std.item()
 
                 # Faster correlation approximation using dot product
-                costs = observations[:, const.gait_net.robot_state_dim :].view(
-                    logits.shape[0], -1, const.gait_net.footstep_option_dim
-                )[:, :, -1]  # (num_envs, num_options, footstep_option_dim)
+                costs = candidate_block(observations, logits.shape[1])[:, :, -1]  # (num_envs, num_options)
                 # Use simple normalized dot product instead of full corrcoef
                 logits_flat = logits[op_mask].flatten()
                 costs_flat = -costs[op_mask].flatten()
@@ -510,9 +576,7 @@ class GaitnetActorCritic(ActorCritic):
         # remove all but the last no-op so it doesn't affect probabilities
         num_options = logits.shape[1]
         # Reshape to get per-option state
-        action_candidates = observations[:, const.gait_net.robot_state_dim :].view(
-            observations.shape[0], num_options, const.gait_net.footstep_option_dim
-        )
+        action_candidates = candidate_block(observations, num_options)
         # Mask: True for valid actions, False for no-ops or high cost
         no_op_mask = action_candidates[:, :, 0] == 1
         # Apply mask to logits (set invalid actions to -inf so they get 0 probability)
@@ -573,6 +637,10 @@ class GaitnetActorCritic(ActorCritic):
                 self.episode_info["duration_mean"] = 0
                 self.episode_info["duration_std"] = 0
                 self.episode_info["ops_per_step"] = 0
+            # ticks where the no-op is the only legal action (two legs already in swing, or no
+            # valid foothold): they carry no policy gradient, only value targets
+            forced = torch.isinf(self.discrete_distribution.logits[:, :-1]).all(dim=1)
+            self.episode_info["forced_no_op"] = forced.float().mean().item()
 
         # Cache for log probability computation
         self._last_action_indices = action_index
@@ -636,6 +704,8 @@ class GaitnetActorCritic(ActorCritic):
                      - Column 0: discrete action index (0-16)
                      - Column 1: mean duration value
         """
+        if self.actor_obs_dim is not None:
+            observations = observations[:, : self.actor_obs_dim]
         return GaitnetActor.act_inference(self.actor, observations)
 
     def evaluate(self, critic_observations, **kwargs):
