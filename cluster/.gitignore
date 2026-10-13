@@ -1,0 +1,11 @@
+# job output and the watcher's live state: per-machine, regenerated, not code
+logs/
+watcher/wandb/
+watcher/*.log
+watcher/*.json
+watcher/current_eval
+watcher/last_eval_time
+watcher/acked.txt
+watcher/runs*.txt
+watcher/best_checkpoints.txt
+watcher/decisions.md
