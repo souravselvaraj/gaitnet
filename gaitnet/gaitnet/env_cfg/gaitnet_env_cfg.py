@@ -111,8 +111,12 @@ def get_env_cfg(
     forward_yaw_rate: float = 0.2,
     idm_inverse: str | None = None,
     max_forward_speed: float | None = None,
+    seed: int | None = None,
 ) -> GaitNetEnvCfg:
     cfg = GaitNetEnvCfg()
+    if seed is not None:
+        # Isaac Lab seeds torch, numpy, random and warp from this when the env is built
+        cfg.seed = seed
     if curriculum not in CURRICULA:
         raise ValueError(f"unknown curriculum {curriculum!r}, expected one of {CURRICULA}")
     if curriculum == "walk":
@@ -240,6 +244,7 @@ def get_env(
     forward_yaw_rate: float = 0.2,
     idm_inverse: str | None = None,
     max_forward_speed: float | None = None,
+    seed: int | None = None,
 ) -> T:
     """Get the environment configuration and the environment instance.
 
@@ -251,6 +256,7 @@ def get_env(
     run on a random level (walk_curriculum.next_levels). `max_init_terrain_level`: highest level a
     robot can start on (None: any), e.g. to resume a trained policy near where its curriculum was.
     `max_forward_speed`: with commands='forward', the top of the x range (m/s); None keeps 0.2.
+    `seed`: the env's seed (Isaac Lab seeds every generator with it); None leaves it unseeded.
     """
     if (history_len > 0 or privileged) and gpu_mpc is None:
         raise ValueError("the policy history and privileged features need the GPU controller (gpu_mpc)")
@@ -259,7 +265,7 @@ def get_env(
         tracking_std=tracking_std, yaw_tracking_std=yaw_tracking_std, walk_p_down=walk_p_down, walk_p_up=walk_p_up,
         walk_random_fraction=walk_random_fraction, max_init_terrain_level=max_init_terrain_level,
         commands=commands, forward_yaw_rate=forward_yaw_rate, idm_inverse=idm_inverse,
-        max_forward_speed=max_forward_speed,
+        max_forward_speed=max_forward_speed, seed=seed,
     )
     env = manager_class(cfg=env_cfg)
     update_controllers(

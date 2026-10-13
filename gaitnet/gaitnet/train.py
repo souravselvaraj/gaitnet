@@ -2,7 +2,34 @@ from isaaclab.app import AppLauncher
 import argparse
 import dataclasses
 
+from gaitnet import PROJECT_ROOT
 from gaitnet.control.mpc.convex_MPC import Gait
+
+PRESETS: dict[str, dict] = {
+    "sc_idm": dict(
+        gpu_mpc=True,
+        num_envs=1024,
+        arch="gaitnet_t",
+        recipe="step",
+        idm_inverse=str(PROJECT_ROOT / "training/gaitnet/idm_models/gaitnet_inverse.pt"),
+        curriculum="walk",
+        walk_p_down=0.3,
+        walk_random_fraction=0.25,
+        max_init_terrain_level=2,
+        commands="forward",
+        tracking_std=0.1,
+        yaw_tracking_std=0.2,
+        critic_noop_fix=True,
+        num_steps_per_env=100,
+        num_mini_batches=8,
+        init_at_random_ep_len=True,
+    ),
+}
+"""Named training settings for --preset. sc_idm: the run behind the best policy so far (SC-idm,
+model_1590): GaitNet-T on the step recipe, its footsteps sent through the training controller's
+inverse footstep model (idm.py), the walk curriculum, forward commands. That policy got there in
+stages (890 iterations without the IDM, on omni commands, before this setting); the preset is the
+final setting, trained from scratch."""
 
 # add argparse arguments
 parser = argparse.ArgumentParser(
@@ -12,7 +39,17 @@ parser.add_argument(
     "--num_envs", type=int, default=100, help="Number of environments to simulate."
 )
 parser.add_argument(
-    "--seed", type=int, default=None, help="Seed used for the environment"
+    "--seed",
+    type=int,
+    default=None,
+    help="Seeds the environment (Isaac Lab seeds torch, numpy, random and warp with it, so the network's "
+    "initial weights too) and the GPU controller's randomisation. Default: unseeded environment, controller 0.",
+)
+parser.add_argument(
+    "--preset",
+    choices=sorted(PRESETS),
+    default=None,
+    help="Start from a named training setting (PRESETS); flags given on the command line still override it.",
 )
 parser.add_argument(
     "--max_iterations", type=int, default=10000, help="RL Policy training iterations."
@@ -232,6 +269,10 @@ parser.add_argument(
 )
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
+# a preset only replaces defaults, so anything given on the command line wins
+preset = parser.parse_known_args()[0].preset
+if preset is not None:
+    parser.set_defaults(**PRESETS[preset])
 # parse the arguments
 args_cli = parser.parse_args()
 
@@ -440,6 +481,7 @@ def main():
         forward_yaw_rate=args_cli.forward_yaw_rate,
         idm_inverse=args_cli.idm_inverse,
         max_forward_speed=args_cli.max_forward_speed,
+        seed=args_cli.seed,
     )
     logger.info(
         f"terrain curriculum: {args_cli.curriculum}; tracking std {args_cli.tracking_std or 0.5} m/s, "
