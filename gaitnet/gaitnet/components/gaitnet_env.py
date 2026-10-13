@@ -24,7 +24,30 @@ logger = get_logger()
 class GaitNetEnv(ManagerBasedRLEnv):
     def __init__(self, episode_info: dict[str, Any] | None = None, *args, **kwargs):
         self.episode_info = episode_info
+        self.walk_metrics: dict[str, float] = {}
+        """What the `walk` terrain curriculum saw at the latest episode ends, logged every step."""
         super().__init__(*args, **kwargs)
+        self.walk_progress = torch.zeros(self.num_envs, device=self.device)
+        """(N,) distance walked this episode along the commanded direction (m), for the `walk`
+        terrain curriculum (env_cfg/curriculum.terrain_levels_walk)."""
+        self.walk_commanded = torch.zeros(self.num_envs, device=self.device)
+        """(N,) distance the velocity command asked for this episode (m)."""
+
+    def _track_walk(self) -> None:
+        """Add this step to the episode's walked and commanded distances. Read at the start of the
+        step, so the velocity is the one the previous step ended with."""
+        command = self.command_manager.get_command("base_velocity")[:, :2]
+        speed = command.norm(dim=-1)
+        velocity = self.scene["robot"].data.root_lin_vel_b[:, :2]
+        along = (velocity * command).sum(dim=-1) / speed.clamp_min(1e-6)
+        self.walk_progress += along * self.step_dt
+        self.walk_commanded += speed * self.step_dt
+
+    def _reset_idx(self, env_ids):
+        super()._reset_idx(env_ids)  # the curriculum reads the walked distances first
+        if hasattr(self, "walk_progress"):
+            self.walk_progress[env_ids] = 0.0
+            self.walk_commanded[env_ids] = 0.0
 
     def load_managers(self):
         # note: this order is important since observation manager needs to know the command and action managers
@@ -51,6 +74,8 @@ class GaitNetEnv(ManagerBasedRLEnv):
                 env=self, options_per_leg=const.gait_net.num_footstep_options
             ),
             num_footstep_options=const.gait_net.num_footstep_options,
+            history_len=getattr(self.cfg, "policy_history_len", 0),
+            privileged=getattr(self.cfg, "policy_privileged", False),
         )
         print("[INFO] Observation Manager:", self.observation_manager)
 
@@ -86,4 +111,7 @@ class GaitNetEnv(ManagerBasedRLEnv):
             for key, val in self.episode_info.items():
                 self.extras["log"][f"Custom_Metrics/{key}"] = val
             self.episode_info.clear()
+        for key, val in self.walk_metrics.items():
+            self.extras["log"][f"Curriculum/{key}"] = val
+        self._track_walk()
         return super().step(action)

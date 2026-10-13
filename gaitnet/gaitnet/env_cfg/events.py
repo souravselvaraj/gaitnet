@@ -5,6 +5,18 @@ from isaaclab.utils import configclass
 
 joint_pos_eps = 0.05
 
+
+def reset_robot_controllers(env, env_ids):
+    """Reset the low-level controllers of envs starting a new episode.
+
+    `env.cfg.robot_controllers.reset`: the GPU controller resets that env's controller
+    state and resamples its randomisation knobs; the CPU pool keeps its historical
+    behaviour (no reset) unless built with `reset_on_episode_end=True`.
+    """
+    controllers = getattr(env.cfg, "robot_controllers", None)
+    if controllers is not None:  # not built yet while the env itself is being built
+        controllers.reset(env_ids)
+
 @configclass
 class EventsCfg:
     """Configuration for events."""
@@ -33,6 +45,8 @@ class EventsCfg:
     # )
 
     # on reset
+    reset_controllers = EventTerm(func=reset_robot_controllers, mode="reset")
+
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
         mode="reset",

@@ -1,26 +1,22 @@
-import numpy as np
 import torch
 from isaaclab.assets import ArticulationData
 from isaaclab.envs import ManagerBasedRLEnv, mdp
 import isaaclab_tasks.manager_based.locomotion.velocity.config.spot.mdp as spot_mdp  # type: ignore
 from isaaclab.managers import RewardTermCfg as RewTerm, SceneEntityCfg
 from isaaclab.utils import configclass
-from gaitnet.sim2real.siminterface import Sim2RealInterface
+from gaitnet.sim2real.robot_controllers import RobotControllers
 import gaitnet.constants as const
 
 
 def a_foot_in_swing(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Reward tracking of angular velocity commands (yaw) using exponential kernel."""
-    controllers: VectorPool[Sim2RealInterface] = env.cfg.robot_controllers  # type: ignore
+    controllers: RobotControllers = env.cfg.robot_controllers  # type: ignore
 
-    contacts: np.ndarray = controllers.call(
-        Sim2RealInterface.get_contact_state, mask=None
-    )
+    contacts = controllers.contact_state()
     # note we don't need to fix leg ordering here since we only care about the number of legs in swing
-    num_legs_in_swing = np.sum(~contacts, axis=1)
+    num_legs_in_swing = (~contacts).sum(dim=1)
     # atleast 1 leg in swing
-    reward = (num_legs_in_swing >= 1).astype(np.float32)
-    return torch.from_numpy(reward).to(env.device)
+    return (num_legs_in_swing >= 1).float()
 
 
 def height_below_minimum(
@@ -112,3 +108,36 @@ class RewardsCfg:
     #         "minimum_height": 0.0,
     #     },
     # )
+
+
+# -- teacher recipe terms (gaitnet_env_cfg.get_env_cfg(recipe="teacher") adds these) --------------
+
+def progress(env: ManagerBasedRLEnv, command_name: str = "base_velocity") -> torch.Tensor:
+    """Progress along the commanded direction: clip(v . c_hat, 0, |c|) / max(|c|, 0.05), with v the
+    base velocity in the yaw frame and c the commanded planar velocity. 0 for a zero command."""
+    from isaaclab.utils.math import quat_apply_inverse, yaw_quat
+
+    asset = env.scene["robot"]
+    command = env.command_manager.get_command(command_name)[:, :2]
+    speed = command.norm(dim=-1)
+    velocity = quat_apply_inverse(yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w)[:, :2]
+    along = (velocity * command).sum(dim=-1) / speed.clamp_min(1e-6)
+    return torch.minimum(along.clamp_min(0.0), speed) / speed.clamp_min(0.05)
+
+
+EDGE_FEET = ["FR_foot", "FL_foot", "RR_foot", "RL_foot"]
+"""Slot order, matching components/privileged.SCANNERS."""
+
+
+def edge_touchdowns(env: ManagerBasedRLEnv, threshold: float = 0.05) -> torch.Tensor:
+    """Feet that touched down during the last env step (contact sensor first contact) with their
+    centre within `threshold` (m) of an invalid cell of their own leg's height scan."""
+    from gaitnet.gaitnet.components.privileged import foot_edge_distance
+
+    sensor = env.scene["contact_forces"]
+    asset = env.scene["robot"]
+    sensor_ids, _ = sensor.find_bodies(EDGE_FEET, preserve_order=True)
+    body_ids, _ = asset.find_bodies(EDGE_FEET, preserve_order=True)
+    touched = sensor.compute_first_contact(env.step_dt)[:, sensor_ids]
+    distance = foot_edge_distance(env, asset.data.body_pos_w[:, body_ids, :2])
+    return (touched & (distance < threshold)).float().sum(dim=-1)

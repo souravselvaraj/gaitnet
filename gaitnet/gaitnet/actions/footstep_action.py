@@ -8,8 +8,7 @@ from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 import torch
 
-from gaitnet.sim2real.siminterface import Sim2RealInterface, SimInterface
-from gaitnet.util import VectorPool
+from gaitnet.sim2real.robot_controllers import RobotControllers
 import numpy as np
 import gaitnet.constants as const
 from gaitnet import get_logger, PROJECT_ROOT
@@ -74,6 +73,14 @@ class FSCActionTerm(ActionTerm):
             (self.num_envs, self.action_dim), device=self.device
         )
         self._processed_actions = self._raw_actions
+        self._slot_to_leg = torch.tensor([1, 0, 3, 2], device=self.device)
+        """terrain slot (FR, FL, RR, RL) -> controller leg (FL, FR, RL, RR)"""
+        self._idm = None
+        if cfg.idm_inverse:
+            from gaitnet.gaitnet.idm import IdmAdapter
+
+            self._idm = IdmAdapter.load(cfg.idm_inverse, None, self.device)
+            logger.info(f"footsteps go through the inverse footstep model {cfg.idm_inverse}")
 
     def _get_option_manager(self) -> "GaitNetObservationManager":
         """Get the footstep option manager.
@@ -204,25 +211,39 @@ class FSCActionTerm(ActionTerm):
 
         # Convert actions (index + duration) to footstep actions (leg, x, y, duration)
         self._processed_actions = self.action_indices_to_actions(actions)
-        processed_actions_cpu = self.processed_actions.cpu().numpy()
+        footsteps = self.processed_actions
 
         # perform logging if enabled
-        FSCActionTerm.log_actions(processed_actions_cpu)
+        if const.experiments.contact_schedule_logging or const.experiments.swing_duration_logging:
+            FSCActionTerm.log_actions(footsteps.cpu().numpy())
 
         # ablate swing duration if specified
+        durations = footsteps[:, 3]
         if const.experiments.ablate_swing_duration:
-            processed_actions_cpu[:, 3] = const.experiments.constant_swing_duration
+            durations = torch.full_like(durations, const.experiments.constant_swing_duration)
 
-        # mask out invalid steps
-        mask = processed_actions_cpu[:, 0] != NO_STEP
-        footstep_parameters = self.footstep_kwargs(processed_actions_cpu)
+        # mask out invalid steps; terrain-slot order [FR, FL, RR, RL] -> controller order
+        # [FL, FR, RL, RR], as footstep_kwargs does (NO_STEP rows are masked, any leg will do)
+        slots = footsteps[:, 0].long()
+        active = slots != NO_STEP
+        legs = self._slot_to_leg[slots.clamp(0, 3)]
 
-        # initiate the footsteps
-        robot_controllers: VectorPool[Sim2RealInterface] = self.env_cfg.robot_controllers  # type: ignore
-        robot_controllers.call(
-            function=Sim2RealInterface.initiate_footstep,
-            mask=mask,
-            **footstep_parameters,
+        # on the env's device throughout; the CPU controller pool converts for itself
+        robot_controllers: RobotControllers = self.env_cfg.robot_controllers  # type: ignore
+        location_hip = footsteps[:, 1:3]
+        if self._idm is not None and active.any():
+            # literal IDM (idm.py): send what makes the foot land on the chosen candidate
+            data = self._env.scene["robot"].data
+            state = robot_controllers.history_features(data.joint_pos, data.root_lin_vel_b, data.root_ang_vel_b)
+            location_hip = location_hip.clone()
+            location_hip[active] = self._idm(
+                state[active].to(location_hip.dtype), slots[active], durations[active], location_hip[active]
+            )
+        robot_controllers.initiate_footsteps(
+            active=active,
+            leg=legs,
+            location_hip=location_hip,
+            duration=durations,
         )
 
     def apply_actions(self):
@@ -248,3 +269,6 @@ class FSCActionCfg(ActionTermCfg):
     """Configuration for the Footstep Controller (FSC) Action Term"""
 
     class_type: type[ActionTerm] = FSCActionTerm
+    idm_inverse: str | None = None
+    """Inverse footstep model (idm.py) of the low-level controller: every commanded foothold is
+    replaced by what makes the foot land on it. None sends the candidates as they are."""

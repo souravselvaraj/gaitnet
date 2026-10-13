@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 from isaaclab.envs import mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -13,8 +12,7 @@ from isaaclab.envs.utils.io_descriptors import (
     record_shape,
 )
 import torch.nn.functional as F
-from gaitnet.util.vectorpool import VectorPool
-from gaitnet.sim2real.abstractinterface import Sim2RealInterface
+from gaitnet.sim2real.robot_controllers import RobotControllers
 from gaitnet import get_logger
 from gaitnet.util.data_logging import save_fig, save_img
 import gaitnet.constants as const
@@ -81,7 +79,7 @@ def contact_state_sensors(
 )
 def contact_state_controller(env: ManagerBasedEnv) -> torch.Tensor:
     """Get the contact state from the controller."""
-    controllers: VectorPool[Sim2RealInterface] = env.cfg.robot_controllers  # type: ignore
+    controllers: RobotControllers = env.cfg.robot_controllers  # type: ignore
 
     # controllers won't be initilized when the on_inspect is called, in that case return fake data.
     # this should only happen once in the beginning of training when the env is created
@@ -91,14 +89,10 @@ def contact_state_controller(env: ManagerBasedEnv) -> torch.Tensor:
         )
         return torch.zeros((env.num_envs, const.robot.num_legs), device=env.device, dtype=torch.bool)
 
-    contacts: np.ndarray = controllers.call(
-        Sim2RealInterface.get_contact_state, mask=None
-    )
+    # the controller's scheduled contact, (N, 4) bool on the env device
+    contacts = controllers.contact_state()
     # interface order FL, FR, RL, RR -> terrain-slot order FR, FL, RR, RL
-    contacts = contacts[:, [1, 0, 3, 2]]
-    # logger.info(f"contact: {contacts[0]}")
-    contacts_gpu = torch.from_numpy(contacts).to(env.device)
-    return contacts_gpu
+    return contacts[:, [1, 0, 3, 2]]
 
 
 def cspace_height_scan(

@@ -8,9 +8,7 @@ from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 import torch
 
-from gaitnet import sim2real
-from gaitnet.util import VectorPool
-from gaitnet.simulation.util import controls_to_joint_efforts
+from gaitnet.sim2real.robot_controllers import RobotControllers
 from gaitnet import get_logger
 
 logger = get_logger()
@@ -74,13 +72,13 @@ class MPCActionTerm(ActionTerm):
         Note:
             This is called at every simulation step by the manager.
         """
-        processed_actions_cpu = self.processed_actions.cpu().numpy()
-        robot_controllers: VectorPool[sim2real.Sim2RealInterface] = self.env_cfg.robot_controllers  # type: ignore
-        torques = controls_to_joint_efforts(
-            scene=self._env.scene,
-            controllers=robot_controllers,
-            controls=processed_actions_cpu,
-            asset_name=self.cfg.asset_name,
+        robot_controllers: RobotControllers = self.env_cfg.robot_controllers  # type: ignore
+        data = self._asset.data
+        torques = robot_controllers.compute_torques(
+            joint_pos=data.joint_pos,
+            joint_vel=data.joint_vel,
+            root_state_w=data.root_state_w,
+            command=self.processed_actions,
         )
         self._asset.set_joint_effort_target(torques, self._joint_ids)
     
@@ -90,17 +88,12 @@ class MPCActionTerm(ActionTerm):
         Args:
             env_ids: The environment IDs to reset.
         """
-        # convert env_ids to numpy arrray if not none
-        if isinstance(env_ids, torch.Tensor):
-            env_ids = env_ids.cpu().numpy()  # type: ignore
-
+        # Never reached in training: HierarchicalActionTerm, which wraps this term, does not
+        # forward reset(). The controllers are reset by the reset_robot_controllers event.
+        if env_ids is None:
+            env_ids = slice(None)  # type: ignore
         self._raw_actions[env_ids] = 0.0
         self._processed_actions[env_ids] = 0.0
-        robot_controllers: VectorPool[sim2real.Sim2RealInterface] = self.env_cfg.robot_controllers  # type: ignore
-        robot_controllers.call(
-            function=sim2real.Sim2RealInterface.reset,
-            mask=env_ids,  # type: ignore
-        )
 
 
 @configclass
