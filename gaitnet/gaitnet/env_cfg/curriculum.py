@@ -72,6 +72,65 @@ def terrain_levels_vel(
     return mean_difficulty
 
 
+def terrain_levels_walk(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    required_fraction: float = 0.3,
+    min_commanded: float = 0.2,
+    p_up_given_success: float = 0.1,
+    p_down_given_failure: float = 0.5,
+    p_random: float = 0.02,
+    random_fraction: float = 0.0,
+) -> torch.Tensor:
+    """Up a level for surviving and walking `required_fraction` of the commanded distance, down for
+    falling or stalling (components/walk_curriculum.walk_moves, which says why vmdp.terrain_levels_vel
+    kept every robot on level 0). 0.3 rather than 0.5 because the 1035 checkpoint makes about half
+    its commanded speed even on level 0 (the teacher recipe's Episode_Reward/progress, 0.44-0.50):
+    a 0.5 bar would demote half the robots with no voids in the way. Reads GaitNetEnv's per-episode distances, which are still this
+    episode's: Isaac Lab runs the curriculum before anything is reset. Returns the mean terrain
+    level, the same quantity terrain_levels_vel logs; with `random_fraction` > 0 that many of the
+    episodes run on a uniformly random level instead (walk_curriculum.next_levels), and the logged
+    level is the curriculum's, not the random ones."""
+    from gaitnet.gaitnet.components.walk_curriculum import next_levels, walk_moves
+
+    terrain: TerrainImporter = env.scene.terrain  # type: ignore
+    termination = env.termination_manager
+    env_ids = torch.as_tensor(env_ids, device=env.device)
+    failed = torch.zeros(len(env_ids), dtype=torch.bool, device=env.device)
+    for name in termination.active_terms:
+        if not termination.get_term_cfg(name).time_out:
+            failed |= termination.get_term(name)[env_ids]
+    walked, commanded = env.walk_progress[env_ids], env.walk_commanded[env_ids]  # type: ignore[attr-defined]
+    move_up, move_down, progressed = walk_moves(
+        termination.time_outs[env_ids], failed, walked, commanded, required_fraction, min_commanded,
+        p_up_given_success, p_down_given_failure, p_random,
+    )
+    if random_fraction <= 0.0:
+        terrain.update_env_origins(env_ids, move_up, move_down)
+    else:
+        if not hasattr(env, "walk_curriculum_level"):
+            env.walk_curriculum_level = terrain.terrain_levels.clone()  # type: ignore[attr-defined]
+            env.walk_explored = torch.zeros_like(terrain.terrain_levels, dtype=torch.bool)  # type: ignore[attr-defined]
+        level, explore, run_on = next_levels(
+            env.walk_curriculum_level[env_ids], env.walk_explored[env_ids], move_up, move_down,  # type: ignore[attr-defined]
+            terrain.max_terrain_level, random_fraction,
+        )
+        env.walk_curriculum_level[env_ids] = level  # type: ignore[attr-defined]
+        env.walk_explored[env_ids] = explore  # type: ignore[attr-defined]
+        terrain.terrain_levels[env_ids] = run_on
+        terrain.env_origins[env_ids] = terrain.terrain_origins[run_on, terrain.terrain_types[env_ids]]
+        env.walk_metrics["explore_level"] = terrain.terrain_levels[env.walk_explored].float().mean().item() \
+            if env.walk_explored.any() else 0.0  # type: ignore[attr-defined]
+
+    walking = commanded >= min_commanded
+    if walking.any():
+        env.walk_metrics["walked_fraction"] = (walked[walking] / commanded[walking]).mean().item()  # type: ignore[attr-defined]
+        env.walk_metrics["progressed"] = progressed[walking].float().mean().item()  # type: ignore[attr-defined]
+    if random_fraction > 0.0:
+        return torch.mean(env.walk_curriculum_level.float())  # type: ignore[attr-defined]
+    return torch.mean(terrain.terrain_levels.float())
+
+
 @configclass
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
