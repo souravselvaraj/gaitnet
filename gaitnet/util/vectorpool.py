@@ -1,7 +1,8 @@
 from __future__ import annotations
 import inspect
+import os
 import traceback
-from multiprocessing import Pipe, Process, cpu_count
+from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Any, Callable, Generic, Type, TypeVar
 
@@ -56,13 +57,14 @@ class VectorPool(Generic[T]):
         Args:
             instances: Number of object instances to create
             cls: The Class to instantiate
-            num_workers: Number of worker processes (default: cpu_count())
+            num_workers: Number of worker processes (default: number of CPUs in this process's affinity mask)
                 automatically set to the number of instances if that is lower
                 than the desired number of workers
             **kwargs: Additional arguments passed to Class constructor
         """
         self.instances = instances
-        self.num_workers = min(num_workers or cpu_count(), instances)
+        # CPUs this process may run on (a Slurm job's allocation), not the whole node's cpu_count()
+        self.num_workers = min(num_workers or len(os.sched_getaffinity(0)), instances)
 
         self.workers: list[Process] = []
         self.pipes: list[Connection] = []
@@ -83,9 +85,12 @@ class VectorPool(Generic[T]):
         for worker_id, num_objects in zip(range(self.num_workers), worker_objects):
             parent_conn, child_conn = Pipe()
 
+            # daemon: multiprocessing's exit handler terminates daemonic workers, but would join
+            # non-daemonic ones forever (they block in recv() while the parent holds the pipe)
             worker = Process(
                 target=self._worker_loop,
                 args=(child_conn, worker_id, cls, num_objects, kwargs),
+                daemon=True,
             )
             worker.start()
 
