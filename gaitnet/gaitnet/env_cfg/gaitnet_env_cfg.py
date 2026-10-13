@@ -110,6 +110,7 @@ def get_env_cfg(
     commands: str = "omni",
     forward_yaw_rate: float = 0.2,
     idm_inverse: str | None = None,
+    max_forward_speed: float | None = None,
 ) -> GaitNetEnvCfg:
     cfg = GaitNetEnvCfg()
     if curriculum not in CURRICULA:
@@ -155,11 +156,13 @@ def get_env_cfg(
     cfg.actions.footstep_controller.idm_inverse = idm_inverse
     if commands not in COMMANDS:
         raise ValueError(f"unknown commands {commands!r}, expected one of {COMMANDS}")
+    if max_forward_speed is not None and commands != "forward":
+        raise ValueError("max_forward_speed needs commands='forward'")
     if commands == "forward":
         # the deployed robot maps terrain with a forward-facing camera: nothing beside or behind it is
         # known, so it is only ever commanded forward (and the evals and Gazebo trials are straight)
         ranges = cfg.commands.base_velocity.ranges
-        ranges.lin_vel_x = (0.0, max(ranges.lin_vel_x))
+        ranges.lin_vel_x = (0.0, max_forward_speed if max_forward_speed is not None else max(ranges.lin_vel_x))
         ranges.lin_vel_y = (0.0, 0.0)
         ranges.ang_vel_z = (-forward_yaw_rate, forward_yaw_rate)
     if tracking_std is not None:
@@ -236,6 +239,7 @@ def get_env(
     commands: str = "omni",
     forward_yaw_rate: float = 0.2,
     idm_inverse: str | None = None,
+    max_forward_speed: float | None = None,
 ) -> T:
     """Get the environment configuration and the environment instance.
 
@@ -246,6 +250,7 @@ def get_env(
     curriculum's p_down_given_failure; None keeps its 0.5; `walk_p_up` its p_up_given_success (None: 0.1). `walk_random_fraction`: share of episodes
     run on a random level (walk_curriculum.next_levels). `max_init_terrain_level`: highest level a
     robot can start on (None: any), e.g. to resume a trained policy near where its curriculum was.
+    `max_forward_speed`: with commands='forward', the top of the x range (m/s); None keeps 0.2.
     """
     if (history_len > 0 or privileged) and gpu_mpc is None:
         raise ValueError("the policy history and privileged features need the GPU controller (gpu_mpc)")
@@ -254,6 +259,7 @@ def get_env(
         tracking_std=tracking_std, yaw_tracking_std=yaw_tracking_std, walk_p_down=walk_p_down, walk_p_up=walk_p_up,
         walk_random_fraction=walk_random_fraction, max_init_terrain_level=max_init_terrain_level,
         commands=commands, forward_yaw_rate=forward_yaw_rate, idm_inverse=idm_inverse,
+        max_forward_speed=max_forward_speed,
     )
     env = manager_class(cfg=env_cfg)
     update_controllers(

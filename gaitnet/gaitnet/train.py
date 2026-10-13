@@ -158,6 +158,13 @@ parser.add_argument(
 )
 parser.add_argument("--forward_yaw_rate", type=float, default=0.2, help="rad/s, with --commands forward.")
 parser.add_argument(
+    "--max_forward_speed",
+    type=float,
+    default=None,
+    help="With --commands forward, the top of the x range (m/s); default keeps 0.2. The training controller's IDM "
+    "was fitted on commands up to 0.2 m/s (body speed p99 0.25), so past ~0.25 it extrapolates.",
+)
+parser.add_argument(
     "--idm_inverse",
     type=str,
     default=None,
@@ -432,10 +439,12 @@ def main():
         commands=args_cli.commands,
         forward_yaw_rate=args_cli.forward_yaw_rate,
         idm_inverse=args_cli.idm_inverse,
+        max_forward_speed=args_cli.max_forward_speed,
     )
     logger.info(
         f"terrain curriculum: {args_cli.curriculum}; tracking std {args_cli.tracking_std or 0.5} m/s, "
-        f"yaw {args_cli.yaw_tracking_std or 0.5} rad/s"
+        f"yaw {args_cli.yaw_tracking_std or 0.5} rad/s; commands {args_cli.commands}, "
+        f"x up to {args_cli.max_forward_speed or 0.2} m/s"
     )
     episode_info = {}
     env.episode_info = episode_info
